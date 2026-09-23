@@ -12,6 +12,9 @@ next-env.d.ts
 dist/
 coverage/
 data/
+.tools/
+.uv-cache/
+test-artifacts/
 *.tsbuildinfo
 .env.*
 !.env.example

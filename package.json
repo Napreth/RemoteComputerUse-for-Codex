@@ -1,26 +1,14 @@
 {
-  "name": "openai-cua-sample-app",
+  "name": "remote-computer-use-for-codex",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.26.0",
   "scripts": {
-    "dev": "node scripts/launch.mjs",
-    "dev:js": "node scripts/launch.mjs javascript",
-    "dev:python": "node scripts/launch.mjs python",
-    "start:js": "node scripts/launch.mjs javascript --production",
-    "start:python": "node scripts/launch.mjs python --production",
-    "lint": "eslint console javascript-app contracts scripts --max-warnings=0",
-    "typecheck": "pnpm -r --if-present typecheck",
-    "test": "pnpm -r --filter !cua-sample-labs test && node --test scripts/*.test.mjs",
-    "build": "pnpm -r --if-present build",
-    "check:js": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
-    "check:python": "uv run --project python-app ruff check python-app && uv run --project python-app mypy --config-file python-app/pyproject.toml python-app/app && uv run --project python-app pytest python-app/tests",
-    "check:labs": "pnpm --filter cua-sample-labs check",
-    "check": "pnpm check:js && pnpm check:python && pnpm check:labs",
-    "playwright:install": "pnpm --filter @cua-sample/runner playwright:install",
-    "playwright:install:with-deps": "pnpm --filter @cua-sample/runner playwright:install:with-deps",
-    "python:install": "uv sync --project python-app --frozen",
-    "python:playwright:install": "uv run --project python-app playwright install chromium"
+    "plugin:sync": "uv sync --project python-app --frozen",
+    "lint": "uv run --project python-app ruff check --no-cache python-app/app/actions.py python-app/app/backends python-app/app/computer_session.py python-app/app/lab_catalog.py python-app/app/mcp_server.py python-app/app/plugin_session.py python-app/app/remote python-app/app/remote_runtime.py python-app/app/responses_loop.py python-app/app/scenario_runtime.py python-app/scripts/live_remote_smoke.py python-app/scripts/live_remote_runtime_smoke.py python-app/tests/test_backend_config.py python-app/tests/test_remote_backends.py python-app/tests/test_computer_session.py python-app/tests/test_mcp_server.py python-app/tests/test_plugin_session.py python-app/tests/test_remote_code_runtime.py python-app/tests/test_remote_worker.py python-app/tests/test_responses_loop.py python-app/tests/test_scenario_runtime.py",
+    "typecheck": "uv run --project python-app mypy --config-file python-app/pyproject.toml python-app/app/actions.py python-app/app/backends python-app/app/computer_session.py python-app/app/mcp_server.py python-app/app/plugin_session.py python-app/app/remote python-app/app/remote_runtime.py python-app/app/responses_loop.py python-app/scripts/live_remote_smoke.py python-app/scripts/live_remote_runtime_smoke.py",
+    "test": "uv run --project python-app pytest -s -p no:cacheprovider python-app/tests",
+    "check": "pnpm lint && pnpm typecheck && pnpm test"
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",

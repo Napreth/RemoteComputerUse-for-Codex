@@ -129,7 +129,12 @@ async def test_historical_running_sse_has_json_error_and_artifacts_are_confined(
     assert (await client.get(f"/api/runs/{run_id}/artifacts/screenshots/safe.png")).content == b"png"
     outside = directory / "private.json"
     outside.write_text("secret")
-    (directory / "screenshots" / "linked.png").symlink_to(outside)
+    try:
+        (directory / "screenshots" / "linked.png").symlink_to(outside)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symbolic-link privilege is unavailable")
+        raise
     assert (await client.get(f"/api/runs/{run_id}/artifacts/screenshots/linked.png")).status_code == 404
     stored = json.loads((directory / "replay.json").read_text())
     stored["run"]["status"] = "running"

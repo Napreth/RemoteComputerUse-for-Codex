@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import pytest
 
 from app.lab_server import start_workspace_lab_server
 
@@ -12,7 +13,12 @@ async def test_workspace_http_serves_nested_assets_and_blocks_escape(tmp_path):
     (workspace / "nested").mkdir()
     (workspace / "nested" / "style.css").write_text("body {}")
     (tmp_path / "secret").write_text("secret")
-    (workspace / "linked").symlink_to(tmp_path / "secret")
+    try:
+        (workspace / "linked").symlink_to(tmp_path / "secret")
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("Windows symbolic-link privilege is unavailable")
+        raise
     server = await start_workspace_lab_server(workspace_path=workspace)
     try:
         async with httpx.AsyncClient(trust_env=False) as client:

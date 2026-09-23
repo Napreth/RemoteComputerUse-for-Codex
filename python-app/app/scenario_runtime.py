@@ -7,7 +7,6 @@ from pathlib import Path
 
 from .errors import RunnerCoreError
 from .lab_catalog import instructions, list_scenarios
-from .lab_server import start_workspace_lab_server
 from .processes import assert_active
 
 
@@ -26,7 +25,7 @@ async def delay(milliseconds: int, signal: asyncio.Event) -> None:
     assert_active(signal)
     try:
         await asyncio.wait_for(signal.wait(), milliseconds / 1000)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return
     raise asyncio.CancelledError("Run aborted.")
 
@@ -46,8 +45,8 @@ async def hold_browser(context: RunExecutionContext) -> None:
 
 
 async def execute_scenario(context: RunExecutionContext) -> None:
-    from .browser import launch_browser_session
-    from .desktop.runtime import launch_python_runtime
+    from .backends import load_backend_config
+    from .remote_runtime import launch_remote_session
     from .responses_loop import create_default_responses_client, run_responses_code_loop
 
     run = context.detail["run"]
@@ -56,13 +55,11 @@ async def execute_scenario(context: RunExecutionContext) -> None:
                               hint="Use one of the public scenarios from /api/scenarios.")
     client = create_default_responses_client()
     lab_id = run["labId"]
-    lab_server = None
-    python = None
     session = None
 
     async def cleanup() -> None:
         errors = []
-        for resource in (python, session, lab_server, client):
+        for resource in (session, client):
             if resource is not None:
                 try:
                     await resource.close()
@@ -71,34 +68,28 @@ async def execute_scenario(context: RunExecutionContext) -> None:
         if errors:
             release_failed = any(getattr(error, "code", "") in ("input_release_failed", "input_release_timeout") for error in errors)
             raise RunnerCoreError("Run cleanup failed: " + "; ".join(str(error) for error in errors),
-                                  code="desktop_cleanup_failed" if release_failed else "cleanup_failed",
-                                  hint="Release held keys and mouse buttons, check desktop input permissions, then restart the runner before starting another run." if release_failed else None)
+                                  code="remote_cleanup_failed" if release_failed else "cleanup_failed",
+                                  hint="Disconnect the remote session, then restart the runner before starting another run." if release_failed else None)
 
     try:
         assert_active(context.signal)
-        if run["browserMode"] == "headless":
-            raise RunnerCoreError("Local PyAutoGUI requires a visible browser.", code="visible_browser_required", status_code=400)
         await context.emit_event({"type": "run_progress", "level": "ok", "detail": run["model"],
-                                  "message": f"Using the live Responses API code loop for the {lab_id} lab."})
-        lab_server = await start_workspace_lab_server(workspace_path=context.detail["workspacePath"])
-        lab_url = lab_server.url_for("index.html")
-        python = await launch_python_runtime(signal=context.signal)
+                                  "message": f"Using the persistent remote Python code loop for the {lab_id} scenario."})
+        session = await launch_remote_session(
+            load_backend_config(), context.screenshot_directory, signal=context.signal
+        )
         assert_active(context.signal)
-        session = await launch_browser_session(browser_mode=run["browserMode"], screenshot_dir=context.screenshot_directory,
-                                                url=lab_url, target_label=f"run-scoped {lab_id} lab", signal=context.signal)
-        session.execution = python
-        await session.frontmost()
-        assert_active(context.signal)
-        await context.emit_event({"type": "lab_started", "level": "ok", "detail": lab_url,
-                                  "message": "HTTP lab server booted from the mutable workspace."})
         await context.sync_browser_state(session)
         await context.emit_event({"type": "browser_session_started", "level": "ok", "detail": session.target_label,
-                                  "message": "Browser session launched and bound to the run."})
-        await context.emit_event({"type": "browser_navigated", "level": "ok", "detail": session.page.url,
-                                  "message": f"Browser navigated to the {lab_id} lab."})
+                                  "message": "Remote computer session connected and bound to the run."})
         await context.capture_screenshot(session, f"{lab_id}-loaded")
-        result = await run_responses_code_loop(context=context, session=session, instructions=instructions(lab_id, session.page.url),
-                                               max_response_turns=run["maxResponseTurns"], client=client)
+        result = await run_responses_code_loop(
+            context=context,
+            session=session,
+            instructions=instructions(lab_id, session.current_url),
+            max_response_turns=run["maxResponseTurns"],
+            client=client,
+        )
         await context.capture_screenshot(session, f"{lab_id}-final")
         await hold_browser(context)
         await context.complete_run(notes=result["notes"])

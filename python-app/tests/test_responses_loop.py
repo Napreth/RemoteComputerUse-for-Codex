@@ -46,6 +46,7 @@ def harness(*responses):
     session = SimpleNamespace(
         execution=SimpleNamespace(
             platform="darwin",
+            target="rdp://fixture:3389",
             execute=AsyncMock(return_value={"output": [{"type": "input_text", "text": "ok"}]}),
         )
     )

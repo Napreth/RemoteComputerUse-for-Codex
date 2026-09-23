@@ -19,8 +19,8 @@ def list_scenarios() -> list[dict]:
 def instructions(lab_id: str, current_url: str) -> str:
     definition = next(item for item in catalog()["scenarios"] if item["labId"] == lab_id)
     return "\n".join([
-        f"You are operating a persistent Python/PyAutoGUI desktop session for a {DEFAULT_MODEL_DISPLAY_NAME} CUA demo harness.",
-        "You must use the exec_py tool before you answer.",
-        "Observe the current interface with pyautogui.screenshot(), then use PyAutoGUI mouse and keyboard controls. Coordinates refer to the full desktop screenshot.",
-        f"The lab is already open at {current_url}.", *copy.deepcopy(definition["instructions"]),
+        f"You are operating an isolated remote computer for a {DEFAULT_MODEL_DISPLAY_NAME} CUA demo harness.",
+        "You must inspect the remote framebuffer through exec_py before you answer.",
+        "Use the persistent computer object from exec_py for all screenshots and input. Coordinates refer to screenshot pixels.",
+        f"The connected target is {current_url}.", *copy.deepcopy(definition["instructions"]),
     ])

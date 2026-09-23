@@ -1,0 +1,25 @@
+{
+  "name": "remote-computer-use",
+  "version": "0.1.0",
+  "description": "Run persistent Python computer-use sessions over first-class RDP and VNC backends without taking over the host desktop.",
+  "author": {
+    "name": "Napreth"
+  },
+  "license": "MIT",
+  "keywords": ["computer-use", "rdp", "vnc", "remote-desktop", "mcp"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Remote Computer Use",
+    "shortDescription": "Persistent computer use over RDP and VNC.",
+    "longDescription": "Give Codex a persistent Python computer-use runtime whose framebuffer and input are transported directly over RDP or VNC, leaving the host pointer and keyboard untouched.",
+    "developerName": "Napreth",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Connect to my configured remote computer and show its screen.",
+      "Use the remote computer to complete this GUI task.",
+      "Check the remote computer session status."
+    ]
+  }
+}

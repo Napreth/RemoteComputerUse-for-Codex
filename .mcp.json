@@ -1,0 +1,27 @@
+{
+  "mcpServers": {
+    "remote_computer": {
+      "command": "uv",
+      "cwd": ".",
+      "args": ["run", "--frozen", "--project", "./python-app", "remote-computer-use"],
+      "env_vars": [
+        "REMOTE_COMPUTER_BACKEND",
+        "REMOTE_COMPUTER_RDP_HOST",
+        "REMOTE_COMPUTER_RDP_PORT",
+        "REMOTE_COMPUTER_RDP_USERNAME",
+        "REMOTE_COMPUTER_RDP_PASSWORD",
+        "REMOTE_COMPUTER_RDP_DOMAIN",
+        "REMOTE_COMPUTER_RDP_WIDTH",
+        "REMOTE_COMPUTER_RDP_HEIGHT",
+        "REMOTE_COMPUTER_RDP_INSECURE_TLS",
+        "REMOTE_COMPUTER_VNC_HOST",
+        "REMOTE_COMPUTER_VNC_PORT",
+        "REMOTE_COMPUTER_VNC_PASSWORD",
+        "REMOTE_COMPUTER_VNC_SHARED"
+      ],
+      "startup_timeout_sec": 120,
+      "tool_timeout_sec": 120,
+      "default_tools_approval_mode": "prompt"
+    }
+  }
+}

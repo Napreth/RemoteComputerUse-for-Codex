@@ -3,33 +3,43 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cua-python"
+name = "remote-computer-use"
 version = "0.1.0"
-description = "Native Python computer-use sample runner"
-requires-python = ">=3.10"
+description = "Persistent Codex Computer Use runtime with first-class RDP and VNC backends"
+authors = [{ name = "Napreth" }]
+license = "MIT"
+requires-python = ">=3.12,<3.14"
 dependencies = [
-  "fastapi>=0.115,<1", "uvicorn>=0.34,<1", "pydantic>=2.10,<3",
-  "openai>=2,<3", "playwright==1.58.0", "PyAutoGUI==0.9.54",
-  "Pillow==11.3.0", "python-dotenv>=1,<2",
+  "aardwolf==0.2.13",
+  "fastapi>=0.115,<1",
+  "mcp==2.2.0",
+  "openai>=2,<3",
+  "pillow>=12,<13",
+  "pydantic>=2.10,<3",
+  "python-dotenv>=1,<2",
+  "uvicorn>=0.34,<1",
+  "vnc-remote-control==1.0.4",
 ]
+
+[project.scripts]
+remote-computer-use = "app.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
 [dependency-groups]
-dev = ["pytest>=8,<9", "pytest-asyncio>=0.25,<1", "httpx>=0.28,<1", "ruff>=0.11", "mypy>=1.15"]
+dev = ["pytest>=8,<9", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "ruff>=0.16,<1", "mypy>=1.15", "pyyaml>=6,<7"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-markers = ["live: opt-in real Responses API and desktop input", "browser: opt-in Chromium verification without desktop input"]
+markers = ["live: opt-in real remote-desktop integration"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py312"
 line-length = 120
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.12"
 check_untyped_defs = true
 ignore_missing_imports = true

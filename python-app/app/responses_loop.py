@@ -40,13 +40,13 @@ def create_default_responses_client() -> OpenAIResponsesClient:
     return OpenAIResponsesClient(key)
 
 
-def build_code_tool_definitions(platform: str) -> list[dict[str, Any]]:
+def build_code_tool_definitions(target: str) -> list[dict[str, Any]]:
     return [
         {
             "type": "function",
             "name": "exec_py",
             "strict": True,
-            "description": "Execute Python in the persistent PyAutoGUI desktop session for this run.",
+            "description": "Execute Python in the persistent remote-computer session for this run.",
             "parameters": {
                 "type": "object",
                 "additionalProperties": False,
@@ -56,12 +56,12 @@ def build_code_tool_definitions(platform: str) -> list[dict[str, Any]]:
                         "type": "string",
                         "description": "\n".join(
                             [
-                                f"Python to execute on the local {platform} desktop. Python globals survive between calls.",
-                                "Available globals: pyautogui, log(value), and display(image), accepting a Pillow image.",
-                                "A visible Chromium window is already open to the lab. Start with display(pyautogui.screenshot()).",
-                                "Use PyAutoGUI mouse and keyboard input. On macOS (darwin), use command hotkeys; elsewhere use ctrl.",
-                                "Screenshots use the same coordinates as PyAutoGUI input, including on Retina displays. All coordinates refer to the full desktop screenshot.",
-                                "Operate only the lab window. No Playwright objects are available. Do not change the PyAutoGUI fail-safe setting.",
+                                f"Python to execute against {target}. Python globals survive between calls.",
+                                "Available globals: computer, Image, log(value), and display(image).",
+                                "Start by calling display(computer.screenshot()). Screenshots are Pillow images and use the same pixel coordinates as input.",
+                                "computer provides size, screenshot, move_to, click, drag, drag_to, scroll, write, press, keypress/hotkey, status, and run_actions.",
+                                "Use ordinary Python control flow to combine actions, inspect screenshots, and loop within one call. run_actions accepts validated action dictionaries and returns the final screenshot.",
+                                "RDP/VNC are transports, not guest OS declarations. Use only guest shortcuts justified by what you observe.",
                             ]
                         ),
                     }
@@ -224,7 +224,7 @@ async def run_responses_code_loop(
             "parallel_tool_calls": False,
             "reasoning": {"effort": "low"},
             "truncation": "auto",
-            "tools": build_code_tool_definitions(session.execution.platform),
+            "tools": build_code_tool_definitions(session.execution.target),
         }
         if previous_response_id is not None:
             request["previous_response_id"] = previous_response_id
@@ -288,7 +288,7 @@ async def run_responses_code_loop(
     return {
         "final_assistant_message": final_assistant_message,
         "notes": [
-            "Executed the scenario through a live Responses API code loop.",
+            "Executed the scenario through a persistent remote Python code loop.",
             f"Model final response: {final_assistant_message}",
         ],
     }
