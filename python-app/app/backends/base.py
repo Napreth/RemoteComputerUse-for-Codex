@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Hashable
 from typing import Any
 
 
@@ -37,15 +38,28 @@ class ComputerBackend(ABC):
     @abstractmethod
     async def scroll(self, x: int, y: int, delta_x: int, delta_y: int) -> None: ...
 
+    def validate_scroll(self, delta_x: int, delta_y: int) -> None:
+        """Reject unsupported wheel directions before moving the pointer."""
+
     @abstractmethod
     async def type_text(self, text: str) -> None: ...
+
+    def validate_text(self, text: str) -> None:
+        """Reject text that cannot be sent before input ownership becomes uncertain."""
 
     @abstractmethod
     async def key_chord(self, keys: list[str]) -> None: ...
 
+    def validate_key_chord(self, keys: list[str]) -> None:
+        """Reject an invalid chord before any key-down is attempted."""
+
     async def key_event(self, key: str, pressed: bool) -> None:
         """Send one physical key transition for persistent Python key holds."""
         raise NotImplementedError("this backend does not support individual key transitions")
+
+    def key_identity(self, key: str) -> Hashable:
+        """Identify equivalent key spellings for held-input bookkeeping."""
+        return key
 
     @abstractmethod
     async def release_inputs(self) -> None:

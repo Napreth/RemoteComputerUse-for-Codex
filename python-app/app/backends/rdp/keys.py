@@ -49,3 +49,30 @@ for index, letter in enumerate("zxcvbnm"):
     SCANCODES[letter] = (0x2C + index, False)
 for index, digit in enumerate("1234567890"):
     SCANCODES[digit] = (0x02 + index, False)
+
+SCANCODES.update({
+    " ": (0x39, False),
+    "-": (0x0C, False), "=": (0x0D, False),
+    "[": (0x1A, False), "]": (0x1B, False), "\\": (0x2B, False),
+    ";": (0x27, False), "'": (0x28, False), "`": (0x29, False),
+    ",": (0x33, False), ".": (0x34, False), "/": (0x35, False),
+})
+
+# RDP character-key scancodes assume a US Windows keyboard layout. The remote
+# layout determines the resulting glyph; text entry uses Unicode instead.
+SHIFTED_BASE: dict[str, str] = dict(zip("!@#$%^&*()_+{}|:\"~<>?", "1234567890-=[]\\;'`,./", strict=True))
+CONTROL_KEY_ALIASES = {"\b": "backspace", "\t": "tab", "\n": "enter"}
+# PyAutoGUI 0.9.54 lists CR as a key but leaves its Windows mapping empty.
+IGNORED_WINDOWS_KEYS = frozenset({"\r"})
+
+
+def key_scancode(key: str) -> tuple[tuple[int, bool], bool] | None:
+    """Resolve a key without discarding single-character case or Shift."""
+    if key in IGNORED_WINDOWS_KEYS:
+        return None
+    normalized = CONTROL_KEY_ALIASES.get(key, key if len(key) == 1 else key.strip().lower().replace("_", ""))
+    shifted = normalized in SHIFTED_BASE or len(normalized) == 1 and normalized.isascii() and normalized.isupper()
+    base = SHIFTED_BASE.get(normalized, normalized.lower() if shifted else normalized)
+    if base not in SCANCODES:
+        raise ValueError(f"unsupported RDP key name: {key}")
+    return SCANCODES[base], shifted

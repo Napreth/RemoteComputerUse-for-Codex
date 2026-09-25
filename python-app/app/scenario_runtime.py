@@ -46,6 +46,7 @@ async def hold_browser(context: RunExecutionContext) -> None:
 
 async def execute_scenario(context: RunExecutionContext) -> None:
     from .backends import load_backend_config
+    from .lab_server import start_guest_workspace_lab_server
     from .remote_runtime import launch_remote_session
     from .responses_loop import create_default_responses_client, run_responses_code_loop
 
@@ -55,11 +56,12 @@ async def execute_scenario(context: RunExecutionContext) -> None:
                               hint="Use one of the public scenarios from /api/scenarios.")
     client = create_default_responses_client()
     lab_id = run["labId"]
+    lab_server = None
     session = None
 
     async def cleanup() -> None:
         errors = []
-        for resource in (session, client):
+        for resource in (session, lab_server, client):
             if resource is not None:
                 try:
                     await resource.close()
@@ -75,18 +77,41 @@ async def execute_scenario(context: RunExecutionContext) -> None:
         assert_active(context.signal)
         await context.emit_event({"type": "run_progress", "level": "ok", "detail": run["model"],
                                   "message": f"Using the persistent remote Python code loop for the {lab_id} scenario."})
+        config = load_backend_config()
+        lab_server = await start_guest_workspace_lab_server(
+            workspace_path=context.detail["workspacePath"],
+            remote_host=config.host,
+            remote_port=config.port,
+        )
+        lab_url = lab_server.url_for("index.html")
+        await context.emit_event({"type": "lab_started", "level": "ok", "detail": lab_url,
+                                  "message": "Guest-reachable lab server booted from the mutable workspace."})
         session = await launch_remote_session(
-            load_backend_config(), context.screenshot_directory, signal=context.signal
+            config, context.screenshot_directory, signal=context.signal
         )
         assert_active(context.signal)
+        await session.navigate(lab_url)
+        try:
+            await lab_server.wait_for_index()
+        except TimeoutError as error:
+            raise RunnerCoreError(
+                "The remote guest did not load the selected lab.",
+                code="guest_lab_unreachable",
+                hint=(
+                    "Allow the guest to reach the run-scoped lab server, or set "
+                    "REMOTE_COMPUTER_LAB_HOST and REMOTE_COMPUTER_LAB_BIND_HOST to a reachable host interface."
+                ),
+            ) from error
         await context.sync_browser_state(session)
         await context.emit_event({"type": "browser_session_started", "level": "ok", "detail": session.target_label,
                                   "message": "Remote computer session connected and bound to the run."})
+        await context.emit_event({"type": "browser_navigated", "level": "ok", "detail": lab_url,
+                                  "message": f"Remote guest navigated to the {lab_id} lab."})
         await context.capture_screenshot(session, f"{lab_id}-loaded")
         result = await run_responses_code_loop(
             context=context,
             session=session,
-            instructions=instructions(lab_id, session.current_url),
+            instructions=instructions(lab_id, lab_url),
             max_response_turns=run["maxResponseTurns"],
             client=client,
         )

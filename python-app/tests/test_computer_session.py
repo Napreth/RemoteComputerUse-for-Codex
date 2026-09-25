@@ -41,6 +41,7 @@ class FakeBackend(ComputerBackend):
         self.events.append(("move", x, y))
 
     async def mouse_button(self, x: int, y: int, button: str, pressed: bool) -> None:
+        self.validate_point(x, y)
         self.events.append(("button", button, pressed, x, y))
 
     async def scroll(self, x: int, y: int, delta_x: int, delta_y: int) -> None:
@@ -94,6 +95,38 @@ async def test_drag_always_releases_button() -> None:
     await session.drag([Point(x=1, y=2), Point(x=3, y=4)], duration_ms=0)
 
     assert backend.events[-1] == ("button", "left", False, 3, 4)
+
+
+@pytest.mark.asyncio
+async def test_drag_rejects_out_of_bounds_path_before_pressing() -> None:
+    backend = FakeBackend()
+    session = ComputerSession({"rdp": lambda: backend})
+    await session.connect(RdpConfig(host="target", port=3389, username="user"))
+
+    with pytest.raises(ValueError, match="outside"):
+        await session.drag([Point(x=1, y=2), Point(x=100, y=4)], duration_ms=0)
+
+    assert backend.events == [("connect", "target")]
+
+
+@pytest.mark.asyncio
+async def test_interrupted_drag_releases_at_last_successful_position() -> None:
+    backend = FakeBackend()
+    session = ComputerSession({"rdp": lambda: backend})
+    await session.connect(RdpConfig(host="target", port=3389, username="user"))
+    move = backend.move
+
+    async def fail_last_move(x: int, y: int) -> None:
+        if x == 30:
+            raise RuntimeError("move failed")
+        await move(x, y)
+
+    backend.move = fail_last_move
+    with pytest.raises(RuntimeError, match="move failed"):
+        await session.drag([Point(x=10, y=10), Point(x=20, y=20), Point(x=30, y=30)], duration_ms=0)
+
+    assert backend.events[-1] == ("button", "left", False, 20, 20)
+    assert await session.position() == (20, 20)
 
 
 @pytest.mark.asyncio

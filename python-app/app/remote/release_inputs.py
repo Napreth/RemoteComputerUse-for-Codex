@@ -11,9 +11,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.backends import load_backend_config
 from app.computer_session import ComputerSession
+from app.input_tracking import seed_release
 
 
 async def release() -> None:
+    config = load_backend_config()
+    # stdin is private to the owning parent; no input identities go to disk.
+    payload = json.loads(sys.stdin.buffer.readline(16 * 1024 * 1024))
+    if not isinstance(payload, dict) or payload.get("protocol") != config.kind:
+        raise ValueError("missing or mismatched input identities")
+    seed_release(config.kind, payload.get("identities"))
     session = ComputerSession()
     try:
         await session.connect(load_backend_config())

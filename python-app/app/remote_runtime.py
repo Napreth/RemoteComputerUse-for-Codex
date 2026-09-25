@@ -31,6 +31,13 @@ class RemoteRunSession:
     async def read_state(self) -> dict[str, str]:
         return {"currentUrl": self.current_url}
 
+    async def navigate(self, url: str) -> bytes:
+        from .guest import open_url
+
+        frame = await open_url(self.execution, url)
+        self.current_url = url
+        return frame
+
     async def capture_screenshot(self, label: str) -> dict[str, object]:
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
         safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", label).strip("-").lower() or "frame"

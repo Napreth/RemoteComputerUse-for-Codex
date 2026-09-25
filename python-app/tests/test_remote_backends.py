@@ -9,10 +9,52 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.backends.config import RdpConfig, VncConfig
-from app.backends.rdp import backend as rdp_module
-from app.backends.rdp.backend import RDPBackend, connection_url
-from app.backends.vnc import backend as vnc_module
+from app.backends.rdp import aardwolf as rdp_module
+from app.backends.rdp.aardwolf import AardwolfAdapter, connection_url
+from app.backends.rdp.backend import RDPBackend
+from app.backends.vnc import remote_control as vnc_module
 from app.backends.vnc.backend import VNCBackend
+from app.backends.vnc.remote_control import VncRemoteControlAdapter
+
+
+class FakeProtocolAdapter:
+    def __init__(self) -> None:
+        self.width = 64
+        self.height = 48
+        self.connected = True
+        self.connect = AsyncMock()
+        self.disconnect = AsyncMock()
+        self.screenshot_png = AsyncMock(return_value=b"\x89PNG\r\n\x1a\nfixture")
+        self.move = AsyncMock()
+        self.mouse_button = AsyncMock()
+        self.scroll = AsyncMock()
+        self.type_text = AsyncMock()
+        self.key_chord = AsyncMock()
+        self.release_inputs = AsyncMock()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backend_type", "config"),
+    [
+        (RDPBackend, RdpConfig(host="rdp.example", port=3389, username="codex")),
+        (VNCBackend, VncConfig(host="vnc.example", port=5900)),
+    ],
+)
+async def test_first_class_backend_delegates_to_replaceable_adapter(
+    backend_type: type[RDPBackend | VNCBackend],
+    config: RdpConfig | VncConfig,
+) -> None:
+    adapter = FakeProtocolAdapter()
+    backend = backend_type(lambda: adapter)  # type: ignore[arg-type]
+
+    await backend.connect(config)  # type: ignore[arg-type]
+    await backend.move(2, 3)
+    await backend.disconnect()
+
+    adapter.connect.assert_awaited_once_with(config)
+    adapter.move.assert_awaited_once_with(2, 3)
+    adapter.disconnect.assert_awaited_once()
 
 
 def test_rdp_url_encodes_credentials_and_ipv6() -> None:
@@ -34,7 +76,7 @@ async def test_rdp_text_uses_utf16_units_including_surrogate_pairs() -> None:
         disconnected_evt=SimpleNamespace(is_set=lambda: False),
         send_key_char=AsyncMock(return_value=(True, None)),
     )
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
     backend._connection = connection
 
     await backend.type_text("你😀")
@@ -44,13 +86,83 @@ async def test_rdp_text_uses_utf16_units_including_surrogate_pairs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rdp_chord_cancellation_releases_key_down() -> None:
+async def test_rdp_string_typing_uses_scancodes_for_control_literals() -> None:
+    events: list[tuple[str, object, bool]] = []
+
+    async def send_key_char(character: object, pressed: bool) -> tuple[bool, None]:
+        events.append(("unicode", character, pressed))
+        return True, None
+
+    async def send_key_scancode(scancode: int, pressed: bool, extended: bool) -> tuple[bool, None]:
+        events.append(("scan", scancode, pressed))
+        assert extended is False
+        return True, None
+
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_char=send_key_char,
+        send_key_scancode=send_key_scancode,
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.type_text("a\t\n\r\bb")
+
+    assert events == [
+        ("unicode", "a", True), ("unicode", "a", False),
+        ("scan", 0x0F, True), ("scan", 0x0F, False),
+        ("scan", 0x1C, True), ("scan", 0x1C, False),
+        ("scan", 0x0E, True), ("scan", 0x0E, False),
+        ("unicode", "b", True), ("unicode", "b", False),
+    ]
+    assert adapter._input_tracker.identities == {ord("a"), ord("b")}
+
+
+@pytest.mark.asyncio
+async def test_rdp_control_only_typing_reports_risk_before_blocked_keydown(monkeypatch: pytest.MonkeyPatch) -> None:
+    frames: list[tuple[str, list[int]]] = []
+    monkeypatch.setattr("app.input_tracking._observer", lambda protocol, values: frames.append((protocol, values)))
+    down_started = asyncio.Event()
+
+    async def send_key_scancode(scancode: int, pressed: bool, extended: bool) -> tuple[bool, None]:
+        assert (scancode, pressed, extended) == (0x0F, True, False)
+        down_started.set()
+        await asyncio.Event().wait()
+        return True, None
+
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=send_key_scancode,
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+    await adapter.type_text("")
+    assert frames == []
+
+    task = asyncio.create_task(adapter.type_text("\t"))
+    await asyncio.wait_for(down_started.wait(), 1)
+    assert frames == [("rdp", [])]
+    assert adapter._input_tracker.identities == set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    connection.send_key_scancode = AsyncMock(return_value=(True, None))
+    connection.send_mouse = AsyncMock(return_value=(True, None))
+    adapter._mouse_buttons = SimpleNamespace(MOUSEBUTTON_LEFT=1, MOUSEBUTTON_RIGHT=2, MOUSEBUTTON_MIDDLE=3)
+    await adapter.release_inputs()
+    assert (0x0F, False, False) in [call.args for call in connection.send_key_scancode.await_args_list]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["ctrl", "A"])
+async def test_rdp_chord_cancellation_releases_key_down(key: str) -> None:
     down_delivered = asyncio.Event()
     events: list[tuple[int, bool, bool]] = []
 
     async def send_key_scancode(scancode: int, pressed: bool, extended: bool) -> tuple[bool, None]:
         events.append((scancode, pressed, extended))
-        if pressed:
+        if pressed and len(events) == 1:
             down_delivered.set()
             await asyncio.Event().wait()
         return True, None
@@ -59,9 +171,9 @@ async def test_rdp_chord_cancellation_releases_key_down() -> None:
         disconnected_evt=SimpleNamespace(is_set=lambda: False),
         send_key_scancode=send_key_scancode,
     )
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
     backend._connection = connection
-    task = asyncio.create_task(backend.key_chord(["ctrl", "a"]))
+    task = asyncio.create_task(backend.key_chord([key]))
     await down_delivered.wait()
     task.cancel()
 
@@ -73,6 +185,153 @@ async def test_rdp_chord_cancellation_releases_key_down() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("key", "base_code"), [("A", 0x1E), ("!", 0x02)])
+async def test_rdp_character_events_use_shifted_scancodes(key: str, base_code: int) -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_event(key, True)
+    await adapter.key_event(key, False)
+
+    assert [call.args for call in connection.send_key_scancode.await_args_list] == [
+        (0x2A, True, False), (base_code, True, False), (0x2A, False, False),
+        (0x2A, True, False), (base_code, False, False), (0x2A, False, False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("keys", "base_code"), [(["A"], 0x1E), (["!"], 0x02)])
+async def test_rdp_character_chord_preserves_shift(keys: list[str], base_code: int) -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_chord(keys)
+
+    assert [call.args for call in connection.send_key_scancode.await_args_list] == [
+        (0x2A, True, False), (base_code, True, False), (0x2A, False, False),
+        (0x2A, True, False), (base_code, False, False), (0x2A, False, False),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("literal", "scancode"), [
+    ("\t", 0x0F), ("\n", 0x1C), ("\b", 0x0E),
+])
+async def test_rdp_control_key_literals_send_named_scancodes(literal: str, scancode: int) -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_chord([literal])
+    await adapter.key_event(literal, True)
+    await adapter.key_event(literal, False)
+
+    assert [call.args for call in connection.send_key_scancode.await_args_list] == [
+        (scancode, True, False), (scancode, False, False),
+        (scancode, True, False), (scancode, False, False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rdp_carriage_return_is_noop_for_keys_and_string_typing(monkeypatch: pytest.MonkeyPatch) -> None:
+    frames: list[tuple[str, list[int]]] = []
+    monkeypatch.setattr("app.input_tracking._observer", lambda protocol, values: frames.append((protocol, values)))
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+        send_key_char=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_chord(["\r"])
+    await adapter.key_event("\r", True)
+    await adapter.key_event("\r", False)
+    await adapter.type_text("\r")
+
+    connection.send_key_scancode.assert_not_awaited()
+    connection.send_key_char.assert_not_awaited()
+    assert adapter._input_tracker.identities == set()
+    assert frames == []
+
+
+@pytest.mark.asyncio
+async def test_rdp_character_shift_does_not_leak_into_intervening_keypress() -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_event("A", True)
+    await adapter.key_chord(["b"])
+    await adapter.key_event("A", False)
+
+    assert [call.args for call in connection.send_key_scancode.await_args_list] == [
+        (0x2A, True, False), (0x1E, True, False), (0x2A, False, False),
+        (0x30, True, False), (0x30, False, False),
+        (0x2A, True, False), (0x1E, False, False), (0x2A, False, False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rdp_ctrl_uppercase_chord_keeps_ctrl_until_character_release() -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    await adapter.key_event("ctrl", True)
+    await adapter.key_event("A", True)
+    await adapter.key_event("A", False)
+    await adapter.key_event("ctrl", False)
+
+    assert [call.args for call in connection.send_key_scancode.await_args_list] == [
+        (0x1D, True, False), (0x2A, True, False), (0x1E, True, False), (0x2A, False, False),
+        (0x2A, True, False), (0x1E, False, False), (0x2A, False, False), (0x1D, False, False),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rdp_character_failure_still_attempts_shift_release() -> None:
+    events: list[tuple[int, bool, bool]] = []
+
+    async def send_key_scancode(scancode: int, pressed: bool, extended: bool) -> tuple[bool, None]:
+        events.append((scancode, pressed, extended))
+        if scancode == 0x1E and pressed:
+            raise RuntimeError("character press failed")
+        return True, None
+
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=send_key_scancode,
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+
+    with pytest.raises(RuntimeError, match="character press failed"):
+        await adapter.key_event("A", True)
+
+    assert events == [
+        (0x2A, True, False), (0x1E, True, False), (0x2A, False, False),
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("delta", "steps"), [(120, -120), (-120, 120)])
 async def test_rdp_scroll_uses_valid_signed_wheel_frame(delta: int, steps: int) -> None:
     wheel_up = object()
@@ -80,7 +339,7 @@ async def test_rdp_scroll_uses_valid_signed_wheel_frame(delta: int, steps: int) 
         disconnected_evt=SimpleNamespace(is_set=lambda: False),
         send_mouse=AsyncMock(return_value=(True, None)),
     )
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
     backend.width = 100
     backend.height = 80
     backend._connection = connection
@@ -105,7 +364,7 @@ async def test_rdp_connect_failure_terminates_unpublished_connection(monkeypatch
         get_connection=lambda settings: connection,
     )
     monkeypatch.setattr(RDPConnectionFactory, "from_url", staticmethod(lambda url, settings: factory))
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
 
     with pytest.raises(RuntimeError, match="handshake failed"):
         await backend.connect(RdpConfig(host="target", port=3389, username="user"))
@@ -139,7 +398,7 @@ async def test_rdp_connect_timeout_cancels_handshake_and_terminates_connection(
         get_connection=lambda settings: connection,
     )
     monkeypatch.setattr(RDPConnectionFactory, "from_url", staticmethod(lambda url, settings: factory))
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
 
     with pytest.raises(TimeoutError):
         await backend.connect(
@@ -161,7 +420,7 @@ async def test_rdp_disconnect_timeout_hard_closes_transport(monkeypatch: pytest.
     transport = SimpleNamespace(close=AsyncMock())
     connection = SimpleNamespace(terminate=terminate, disconnected_evt=asyncio.Event())
     connection._RDPConnection__connection = transport
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
     backend._connection = connection
     monkeypatch.setattr(rdp_module, "_RDP_TERMINATE_TIMEOUT", 0.01)
 
@@ -209,7 +468,7 @@ class FakeRfbClient:
 async def test_vnc_backend_supports_framebuffer_pointer_wheel_and_keyboard(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeRfbClient.instances.clear()
     monkeypatch.setattr(vnc_module, "RfbClient", FakeRfbClient)
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
     await backend.connect(VncConfig(host="vnc.example", port=5901, password="secret"))
     client = FakeRfbClient.instances[-1]
 
@@ -231,6 +490,31 @@ async def test_vnc_backend_supports_framebuffer_pointer_wheel_and_keyboard(monke
 
 
 @pytest.mark.asyncio
+async def test_vnc_text_controls_use_named_x11_keysyms() -> None:
+    taps: list[int] = []
+    client = SimpleNamespace(
+        _sock=SimpleNamespace(fileno=lambda: 7),
+        tap=taps.append,
+    )
+    adapter = VncRemoteControlAdapter()
+    adapter._client = client
+
+    await adapter.type_text("\t\n\r\b")
+
+    assert taps == [0xFF09, 0xFF0D, 0xFF0D, 0xFF08]
+    assert adapter._input_tracker.identities == set(taps)
+    with pytest.raises(ValueError, match="unsupported VNC text control"):
+        await adapter.type_text("\x01")
+    assert taps == [0xFF09, 0xFF0D, 0xFF0D, 0xFF08]
+
+
+def test_vnc_held_key_identity_uses_keysym_aliases_without_folding_character_case() -> None:
+    backend = VNCBackend()
+    assert backend.key_identity("escape") == backend.key_identity("esc") == 0xFF1B
+    assert backend.key_identity("A") != backend.key_identity("a")
+
+
+@pytest.mark.asyncio
 async def test_vnc_connect_failure_closes_unpublished_client(monkeypatch: pytest.MonkeyPatch) -> None:
     class FailingRfbClient(FakeRfbClient):
         def connect(self) -> None:
@@ -238,7 +522,7 @@ async def test_vnc_connect_failure_closes_unpublished_client(monkeypatch: pytest
 
     FailingRfbClient.instances.clear()
     monkeypatch.setattr(vnc_module, "RfbClient", FailingRfbClient)
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
 
     with pytest.raises(OSError, match="connection refused"):
         await backend.connect(VncConfig(host="vnc.example", port=5901))
@@ -261,7 +545,7 @@ async def test_vnc_connect_cancellation_closes_socket_while_worker_exits(
 
     BlockingRfbClient.instances.clear()
     monkeypatch.setattr(vnc_module, "RfbClient", BlockingRfbClient)
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
     task = asyncio.create_task(backend.connect(VncConfig(host="vnc.example", port=5901)))
     assert await asyncio.to_thread(started.wait, 0.5)
 
@@ -291,7 +575,7 @@ async def test_vnc_connect_has_total_deadline_and_closes_slow_worker(
     SlowRfbClient.instances.clear()
     monkeypatch.setattr(vnc_module, "RfbClient", SlowRfbClient)
     monkeypatch.setattr(vnc_module, "_VNC_CONNECT_GRACE", 0.01)
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
 
     with pytest.raises(TimeoutError):
         await backend.connect(VncConfig(host="vnc.example", port=5901, connect_timeout=0.1))
@@ -312,7 +596,7 @@ async def test_vnc_transport_failure_marks_backend_disconnected(monkeypatch: pyt
 
     FailingRfbClient.instances.clear()
     monkeypatch.setattr(vnc_module, "RfbClient", FailingRfbClient)
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
     await backend.connect(VncConfig(host="vnc.example", port=5901))
 
     with pytest.raises(OSError, match="server closed"):
@@ -333,7 +617,7 @@ def test_vnc_connected_is_passive_and_never_reads_socket() -> None:
             raise AssertionError("connected must not read from the VNC socket")
 
     transport = ReadGuardSocket()
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
     backend._client = SimpleNamespace(_sock=transport)  # type: ignore[assignment]
 
     assert backend.connected is True
@@ -348,7 +632,7 @@ async def test_raw_key_event_and_cleanup_cover_held_non_modifier_keys() -> None:
         send_key_scancode=AsyncMock(return_value=(True, None)),
         send_mouse=AsyncMock(return_value=(True, None)),
     )
-    backend = RDPBackend()
+    backend = AardwolfAdapter()
     backend._connection = connection
     backend._mouse_buttons = SimpleNamespace(
         MOUSEBUTTON_LEFT=1, MOUSEBUTTON_RIGHT=2, MOUSEBUTTON_MIDDLE=3,
@@ -372,7 +656,7 @@ async def test_vnc_raw_key_event_and_cleanup_cover_printable_keys() -> None:
         _key=lambda key, *, down: events.append((key, down)),
         _pointer=lambda *args: None,
     )
-    backend = VNCBackend()
+    backend = VncRemoteControlAdapter()
     backend._client = client
     await backend.key_event("A", True)
     assert events == [(ord("A"), True)]
@@ -380,3 +664,76 @@ async def test_vnc_raw_key_event_and_cleanup_cover_printable_keys() -> None:
     assert (ord("A"), False) in events
     with pytest.raises(ValueError, match="printable ASCII"):
         await backend.key_event("你", True)
+
+
+@pytest.mark.asyncio
+async def test_rdp_unicode_release_uses_original_utf16_units_after_failed_up():
+    from app.input_tracking import seed_release
+    events = []
+    async def send_char(character, pressed):
+        value = int.from_bytes(character.encode("utf-16-le"), "little")
+        events.append((value, pressed))
+        if not pressed:
+            raise RuntimeError("keyup lost")
+        return True, None
+    connection = SimpleNamespace(disconnected_evt=SimpleNamespace(is_set=lambda: False), send_key_char=send_char)
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+    with pytest.raises(RuntimeError, match="keyup lost"):
+        await adapter.type_text("你😀")
+    identities = adapter._input_tracker.identities
+    assert identities == {ord("你"), 0xD83D, 0xDE00}
+    # A fresh helper adapter receives the original worker's identities.
+    seed_release("rdp", list(identities))
+    try:
+        helper = AardwolfAdapter()
+    finally:
+        seed_release("rdp", [])
+    connection.send_key_char = AsyncMock(return_value=(True, None))
+    connection.send_key_scancode = AsyncMock(return_value=(True, None))
+    connection.send_mouse = AsyncMock(return_value=(True, None))
+    helper._connection = connection
+    helper._mouse_buttons = SimpleNamespace(MOUSEBUTTON_LEFT=1, MOUSEBUTTON_RIGHT=2, MOUSEBUTTON_MIDDLE=3)
+    await helper.release_inputs()
+    assert {int.from_bytes(call.args[0].encode("utf-16-le"), "little")
+            for call in connection.send_key_char.await_args_list} == identities
+    assert all(call.args[1] is False for call in connection.send_key_char.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_vnc_release_includes_unicode_identity():
+    from app.input_tracking import seed_release
+    symbol = 0x01000000 | ord("你")
+    seed_release("vnc", [symbol])
+    try:
+        helper = VncRemoteControlAdapter()
+    finally:
+        seed_release("vnc", [])
+    events = []
+    helper._client = SimpleNamespace(_sock=SimpleNamespace(fileno=lambda: 7),
+                                     _key=lambda key, *, down: events.append((key, down)),
+                                     _pointer=lambda *args: None)
+    await helper.release_inputs()
+    assert (symbol, False) in events
+
+
+@pytest.mark.parametrize("protocol,values", [("rdp", [65536]), ("vnc", [0x10000]), ("vnc", [True])])
+def test_invalid_input_identities_cannot_be_acknowledged(protocol, values):
+    from app.input_tracking import validate_identities
+    with pytest.raises(ValueError, match="release cannot be confirmed"):
+        validate_identities(protocol, values)
+
+
+@pytest.mark.asyncio
+async def test_unicode_input_is_not_sent_when_identity_reporting_fails(monkeypatch):
+    from app import input_tracking
+    def failed_report(protocol, values):
+        raise BrokenPipeError("parent is gone")
+    monkeypatch.setattr(input_tracking, "_observer", failed_report)
+    connection = SimpleNamespace(disconnected_evt=SimpleNamespace(is_set=lambda: False),
+                                 send_key_char=AsyncMock(return_value=(True, None)))
+    backend = AardwolfAdapter()
+    backend._connection = connection
+    with pytest.raises(BrokenPipeError, match="parent is gone"):
+        await backend.type_text("你")
+    connection.send_key_char.assert_not_awaited()

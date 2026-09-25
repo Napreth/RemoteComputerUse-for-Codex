@@ -22,14 +22,18 @@ from PIL import Image
 # the worker imports the same app package as its parent process.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from app.input_tracking import set_observer
 from app.remote.computer import RemoteComputer
+
+_emit_lock = threading.Lock()
 
 
 def emit(payload: dict[str, Any]) -> None:
     if sys.__stdout__ is None:
         raise RuntimeError("Worker stdout is unavailable.")
-    sys.__stdout__.write(json.dumps(payload) + "\n")
-    sys.__stdout__.flush()
+    with _emit_lock:
+        sys.__stdout__.write(json.dumps(payload) + "\n")
+        sys.__stdout__.flush()
 
 
 def image_output(value: Image.Image | bytes) -> dict[str, str]:
@@ -62,6 +66,8 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
     def display(value: Image.Image | bytes) -> None:
         nonlocal image_bytes
         item = image_output(value)
+        # Match the upstream budget: encoded PNG bytes, not the larger base64
+        # transport envelope. Padding does not represent image bytes.
         encoded = item["image_url"].removeprefix("data:image/png;base64,")
         image_bytes += len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
         if image_bytes > 8 * 1024 * 1024 or len(output) >= 250:
@@ -86,37 +92,83 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
     return {"output": output or [{"type": "input_text", "text": "exec_py completed with no output."}]}
 
 
+def handle_request(request: dict[str, Any], namespace: dict[str, Any]) -> dict[str, Any]:
+    operation = request.get("operation")
+    if operation == "execute":
+        code = request.get("code")
+        if not isinstance(code, str) or not code.strip() or len(code.encode("utf-8")) > 64 * 1024:
+            raise ValueError("Python code must be nonempty and at most 64 KiB.")
+        return execute(code, namespace)
+    if operation not in {"screenshot", "actions", "status"}:
+        return {
+            "error": {
+                "code": "unsupported_python_operation",
+                "message": f"Unsupported worker operation: {operation!r}.",
+                "recoverable": True,
+            }
+        }
+
+    computer = namespace["computer"]
+    try:
+        if operation == "screenshot":
+            return {"output": [image_output(computer.screenshot())]}
+        if operation == "actions":
+            actions = request.get("actions")
+            if not isinstance(actions, list):
+                raise TypeError("actions must be a list")
+            return {"output": [image_output(computer.run_actions(actions))]}
+        return {"data": computer.status()}
+    except Exception as error:
+        # Validation and capability errors are request-scoped while the
+        # transport remains usable. A transport failure is terminal so the
+        # parent can run its bounded close/release path.
+        try:
+            connected = bool(computer.status().get("connected"))
+        except (OSError, RuntimeError, TypeError, ValueError):
+            connected = False
+        if not connected or not isinstance(error, (ValueError, TypeError, NotImplementedError)):
+            raise
+        return {
+            "error": {
+                "code": "remote_operation_failed",
+                "message": f"{type(error).__name__}: {error}",
+                "recoverable": True,
+            }
+        }
+
+
 def serve_requests(namespace: dict[str, Any], stream: Any) -> None:
+    owned_threads = set(threading.enumerate())
+    background_input_possible = False
     for line in stream:
         if len(line.encode("utf-8")) > 512 * 1024:
             raise ValueError("Python request exceeds its size limit.")
         request = json.loads(line)
         if not isinstance(request, dict):
             raise TypeError("Python request must be an object.")
-        operation = request.get("operation")
-        if operation == "execute":
-            code = request.get("code")
-            if not isinstance(code, str) or not code.strip() or len(code.encode("utf-8")) > 64 * 1024:
-                raise ValueError("Python code must be nonempty and at most 64 KiB.")
-            result = execute(code, namespace)
-        elif operation == "screenshot":
-            result = {"output": [image_output(namespace["computer"].screenshot())]}
-        elif operation == "actions":
-            actions = request.get("actions")
-            if not isinstance(actions, list):
-                raise TypeError("actions must be a list")
-            result = {"output": [image_output(namespace["computer"].run_actions(actions))]}
-        elif operation == "status":
-            result = {"data": namespace["computer"].status()}
-        else:
-            result = {
-                "error": {
-                    "code": "unsupported_python_operation",
-                    "message": f"Unsupported worker operation: {operation!r}.",
-                }
-            }
-        input_held = namespace["computer"].status().get("inputHeld") is True
-        emit({"id": request.get("id"), **result, "inputHeld": input_held})
+        result = handle_request(request, namespace)
+        # Snapshot before reading health as well: a thread can finish between
+        # the health reply and the later enumeration, leaving late input held.
+        background_input_possible = background_input_possible or any(
+            thread not in owned_threads for thread in threading.enumerate()
+        )
+        # exec_py reports Python exceptions as text, so transport failures may
+        # not produce a protocol error. Always publish last-known health too.
+        try:
+            status = namespace["computer"].status()
+            connected = status.get("connected") is True
+            input_held = status.get("inputHeld") is True
+        except Exception:  # noqa: BLE001 - any health-read failure means the transport is unusable
+            connected = False
+            input_held = True
+        # New Python threads may send input after this reply, or finish after
+        # leaving keys held. Retain uncertainty for the rest of this worker's
+        # lifetime so its owner releases input after terminating the process.
+        background_input_possible = background_input_possible or any(
+            thread not in owned_threads for thread in threading.enumerate()
+        )
+        emit({"id": request.get("id"), **result, "connected": connected,
+              "inputHeld": input_held or background_input_possible})
 
 
 class RemotePyAutoGUI(ModuleType):
@@ -136,8 +188,10 @@ class RemotePyAutoGUI(ModuleType):
             super().__setattr__(name, value)
 
 
-
 def main() -> None:
+    set_observer(lambda protocol, identities: emit({
+        "kind": "input_identity", "protocol": protocol, "identities": identities,
+    }))
     computer = RemoteComputer()
     try:
         # Model-authored code can import os, so remove connection secrets after

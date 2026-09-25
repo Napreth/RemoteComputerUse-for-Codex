@@ -1,7 +1,7 @@
 {
   "name": "remote-computer-use",
   "version": "0.1.0",
-  "description": "Run persistent Python computer-use sessions over first-class RDP and VNC backends without taking over the host desktop.",
+  "description": "Run named persistent Python computer-use sessions over first-class RDP and VNC backends without taking over the host desktop.",
   "author": {
     "name": "Napreth"
   },
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "Remote Computer Use",
     "shortDescription": "Persistent computer use over RDP and VNC.",
-    "longDescription": "Give Codex a persistent Python computer-use runtime whose framebuffer and input are transported directly over RDP or VNC, leaving the host pointer and keyboard untouched.",
+    "longDescription": "Give each plugin-server instance multiple named persistent Python computer-use runtimes whose framebuffer and input are transported through replaceable RDP or VNC adapters, leaving the host pointer and keyboard untouched.",
     "developerName": "Napreth",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Write"],

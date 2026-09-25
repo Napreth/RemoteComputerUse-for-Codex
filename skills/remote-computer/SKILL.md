@@ -8,7 +8,9 @@ description: Operate an isolated graphical computer over the Remote Computer Use
 Use the plugin's persistent `computer_exec_py` runtime. The configured RDP or
 VNC backend is an implementation detail; do not substitute host automation.
 
-1. Call `computer_status`, then `computer_connect` when disconnected.
+1. Call `computer_list`. Connect a host with a stable `name` when it is absent.
+   A plugin-server instance may own several named hosts. Only the first
+   connection may omit `name`; later connections must name their identity.
 2. Use `computer_exec_py` and begin with
    `display(computer.screenshot())`. Python globals survive between calls.
 3. Combine related actions, screenshot inspection, and bounded loops in one
@@ -26,7 +28,13 @@ VNC backend is an implementation detail; do not substitute host automation.
    not turn a multi-step task into one model turn per input event.
 5. Never place credentials in code or tool arguments when the server can read
    them from its environment.
-6. Disconnect when the task is complete or when the remote state is uncertain.
+6. Treat `computer_exec_py` as full Python execution under the MCP server's OS
+   account, not as a filesystem, process, or network sandbox.
+7. Disconnect when the task is complete or when the remote state is uncertain.
+
+When only one host is connected, `session` may be omitted. When several are
+connected, pass the intended `session` to status, execution, screenshot,
+atomic action, batch, and disconnect tools. Never guess among multiple hosts.
 
 RDP and VNC are independent first-class backends. If connection diagnostics
 identify a backend-specific failure, report that backend and its actionable

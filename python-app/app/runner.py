@@ -217,8 +217,8 @@ class RunnerManager:
                                   "message": "Run finished.", "type": "run_completed"})
         except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001 - execution failures become persisted runs
             code = getattr(error, "code", "")
-            cleanup_failed = code in ("desktop_cleanup_failed", "cleanup_failed")
-            if code == "desktop_cleanup_failed":
+            cleanup_failed = code in ("desktop_cleanup_failed", "remote_cleanup_failed", "cleanup_failed")
+            if code in ("desktop_cleanup_failed", "remote_cleanup_failed"):
                 self.desktop_recovery_required = True
             if internal.signal.is_set() and not cleanup_failed:
                 return

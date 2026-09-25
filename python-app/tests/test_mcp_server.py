@@ -32,6 +32,7 @@ async def test_manifest_command_starts_stdio_server() -> None:
         tools_by_name = {tool.name: tool for tool in tools.tools}
         assert set(tools_by_name) == {
             "computer_status",
+            "computer_list",
             "computer_connect",
             "computer_screenshot",
             "computer_exec_py",
@@ -53,6 +54,9 @@ async def test_manifest_command_starts_stdio_server() -> None:
             item_schema = batch_schema["$defs"][item_schema["$ref"].rsplit("/", 1)[-1]]
         assert item_schema["discriminator"]["propertyName"] == "type"
         assert len(item_schema["oneOf"]) == 7
+        assert "name" in tools_by_name["computer_connect"].input_schema["properties"]
+        for tool_name in tools_by_name.keys() - {"computer_connect", "computer_list"}:
+            assert "session" in tools_by_name[tool_name].input_schema["properties"]
 
         invalid_batch = await client.call_tool(
             "computer_run_actions",
@@ -69,3 +73,6 @@ async def test_manifest_command_starts_stdio_server() -> None:
             "width": None,
             "height": None,
         }
+        listed = await client.call_tool("computer_list", {})
+        assert listed.is_error is False
+        assert listed.structured_content == {"sessions": []}

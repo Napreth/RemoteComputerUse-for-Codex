@@ -32,8 +32,19 @@ KEYSYMS: dict[str, int] = {
 for index in range(1, 13):
     KEYSYMS[f"f{index}"] = 0xFFBD + index
 
+CONTROL_KEY_ALIASES = {
+    "\b": "backspace",
+    "\t": "tab",
+    "\n": "return",
+    "\r": "return",
+    "\x1b": "escape",
+    "\x7f": "delete",
+}
+
 
 def keysym(name: str) -> int:
+    if name in CONTROL_KEY_ALIASES:
+        return KEYSYMS[CONTROL_KEY_ALIASES[name]]
     normalized = name.strip().lower().replace("_", "")
     if normalized in KEYSYMS:
         return KEYSYMS[normalized]
@@ -43,6 +54,16 @@ def keysym(name: str) -> int:
     raise ValueError(f"unsupported VNC key name: {name}")
 
 
+def held_keysym(name: str) -> int:
+    if len(name) == 1 and name not in CONTROL_KEY_ALIASES and not 32 <= ord(name) <= 126:
+        raise ValueError("held VNC keys must be named keys, supported controls or printable ASCII; use write for Unicode")
+    return keysym(name)
+
+
 def text_keysym(character: str) -> int:
+    if character in CONTROL_KEY_ALIASES:
+        return keysym(character)
     codepoint = ord(character)
+    if codepoint < 32 or 0x7F <= codepoint < 0xA0:
+        raise ValueError(f"unsupported VNC text control character: U+{codepoint:04X}")
     return codepoint if codepoint <= 0xFF else 0x01000000 | codepoint

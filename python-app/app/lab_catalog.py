@@ -22,5 +22,6 @@ def instructions(lab_id: str, current_url: str) -> str:
         f"You are operating an isolated remote computer for a {DEFAULT_MODEL_DISPLAY_NAME} CUA demo harness.",
         "You must inspect the remote framebuffer through exec_py before you answer.",
         "Use the persistent computer object from exec_py for all screenshots and input. Coordinates refer to screenshot pixels.",
-        f"The connected target is {current_url}.", *copy.deepcopy(definition["instructions"]),
+        f"The lab was requested at {current_url}. Inspect the screenshot to confirm it is visible.",
+        *copy.deepcopy(definition["instructions"]),
     ])

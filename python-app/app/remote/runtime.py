@@ -7,10 +7,12 @@ import contextlib
 import json
 import logging
 import sys
+from collections.abc import Coroutine
 from pathlib import Path
 from typing import Any
 
 from ..backends import BackendConfig, RdpConfig, VncConfig
+from ..input_tracking import validate_identities
 from ..processes import OwnedProcess, assert_active, await_active, child_environment, drain_tail
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,38 @@ class RemotePythonRuntimeError(RuntimeError):
             error = error.get("message", str(error))
         super().__init__(str(error))
         self.code = code
+
+
+class RemotePythonOperationError(RemotePythonRuntimeError):
+    """A request failed without invalidating the persistent worker."""
+
+
+class RemotePythonStartupCleanupError(RemotePythonRuntimeError):
+    """Startup failed and its worker could not be safely cleaned up."""
+
+
+async def _complete_startup_cleanup(cleanup: Coroutine[Any, Any, None]) -> None:
+    """Defer repeated launch cancellation until worker ownership is resolved."""
+    task = asyncio.create_task(cleanup)
+    try:
+        while True:
+            try:
+                await asyncio.shield(task)
+                return
+            except asyncio.CancelledError:
+                if task.cancelled():
+                    raise RemotePythonStartupCleanupError(
+                        "Remote Python startup cleanup was cancelled before completion.",
+                        "startup_cleanup_failed",
+                    ) from None
+                # The launch caller was cancelled again. The cleanup task still
+                # owns the worker; wait for its result before propagating failure.
+    except RemotePythonStartupCleanupError:
+        raise
+    except Exception as error:
+        raise RemotePythonStartupCleanupError(
+            f"Remote Python startup cleanup failed: {error}", "startup_cleanup_failed"
+        ) from error
 
 
 def read_output(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -100,9 +134,54 @@ class RemotePythonRuntime:
         self._busy = False
         self._input_may_be_held = False
         self._reported_input_held = False
+        self._transport_connected = True
         self._closing: asyncio.Task[None] | None = None
+        self._pending_identities: set[int] = set()
+        self._identity_error: Exception | None = None
+        self._identity_generation = 0
+        self._received_identity_generation = 0
+        self._responses: asyncio.Queue[tuple[bytes | Exception, int]] = asyncio.Queue()
+        self._stdout = asyncio.create_task(self._read_worker_output())
         self._stderr = asyncio.create_task(drain_tail(child.stderr))
         self._watcher = asyncio.create_task(self._watch())
+
+    async def _read_worker_output(self) -> None:
+        try:
+            while True:
+                line = await self.child.stdout.readline()
+                if not line:
+                    self._responses.put_nowait((b"", self._identity_generation))
+                    return
+                try:
+                    value = json.loads(line)
+                except (ValueError, UnicodeError) as error:
+                    self._identity_error = error
+                    self._responses.put_nowait((line, self._identity_generation))
+                    continue
+                if isinstance(value, dict) and value.get("kind") == "input_identity":
+                    self._input_may_be_held = True
+                    self._identity_generation += 1
+                    try:
+                        protocol = self.environment["REMOTE_COMPUTER_BACKEND"]
+                        if value.get("protocol") != protocol:
+                            raise ValueError("input identity protocol mismatch")
+                        self._pending_identities.update(validate_identities(protocol, value.get("identities")))
+                    except (ValueError, TypeError, KeyError) as error:
+                        self._identity_error = error
+                    continue
+                self._responses.put_nowait((line, self._identity_generation))
+        except Exception as error:  # noqa: BLE001 - no uncertain input can be reported released
+            # Truncated identity frames must never produce a successful sweep.
+            self._identity_error = error
+            self._responses.put_nowait((error, self._identity_generation))
+
+    async def _next_response(self) -> bytes:
+        value, self._received_identity_generation = await self._responses.get()
+        if self._identity_error is not None:
+            raise RemotePythonRuntimeError("Input identity stream failed.") from self._identity_error
+        if isinstance(value, Exception):
+            raise value
+        return value
 
     async def _watch(self) -> None:
         exited = asyncio.create_task(self.child.wait())
@@ -122,7 +201,7 @@ class RemotePythonRuntime:
         timeout_ms: int,
         signal: asyncio.Event | None = None,
     ) -> dict[str, Any]:
-        line_task = asyncio.create_task(self.child.stdout.readline())
+        line_task = asyncio.create_task(self._next_response())
         exit_task = asyncio.create_task(self.child.wait())
         try:
             async def read_line() -> bytes:
@@ -150,15 +229,30 @@ class RemotePythonRuntime:
                 if not isinstance(value, dict):
                     raise TypeError("Invalid response.")
                 if expected_id is not None and value.get("id") != expected_id:
-                    raise ValueError("Unexpected response ID.")
+                    if "id" not in value and "error" in value:
+                        raise RemotePythonRuntimeError(value["error"])
+                    raise ValueError(
+                        f"Unexpected response ID {value.get('id')!r}; expected {expected_id!r}."
+                    )
                 if expected_id is None and "id" in value:
                     raise ValueError("Unexpected startup response ID.")
             except (TypeError, ValueError, UnicodeError) as error:
-                raise RemotePythonRuntimeError("Python worker returned invalid JSON or response ID.") from error
+                raise RemotePythonRuntimeError(
+                    f"Python worker returned invalid JSON or response ID: {error}"
+                ) from error
+            if isinstance(value.get("connected"), bool):
+                self._transport_connected = value["connected"]
             if isinstance(value.get("inputHeld"), bool):
                 self._reported_input_held = value["inputHeld"]
             if "error" in value:
-                raise RemotePythonRuntimeError(value["error"])
+                response_error = value["error"]
+                if (
+                    isinstance(response_error, dict)
+                    and response_error.get("recoverable") is True
+                    and self._transport_connected
+                ):
+                    raise RemotePythonOperationError(response_error)
+                raise RemotePythonRuntimeError(response_error)
             return value
         finally:
             for task in (line_task, exit_task):
@@ -188,8 +282,17 @@ class RemotePythonRuntime:
             value = await self._receive(self._sequence, self.execution_timeout_ms, signal)
             assert_active(self.signal)
             assert_active(signal)
-            self._input_may_be_held = self._reported_input_held
+            if not self._transport_connected and self._input_may_be_held:
+                # A swallowed Python exception can leave input held on a dead
+                # transport. Close and run emergency release before clearing it.
+                await self.close()
+            self._input_may_be_held = (self._reported_input_held
+                                       or self._identity_generation > self._received_identity_generation)
             return value
+        except RemotePythonOperationError:
+            self._input_may_be_held = (self._reported_input_held
+                                       or self._identity_generation > self._received_identity_generation)
+            raise
         except BaseException:
             try:
                 await self.close()
@@ -227,11 +330,12 @@ class RemotePythonRuntime:
         data = result.get("data")
         if not isinstance(data, dict):
             raise RemotePythonRuntimeError("Remote worker returned invalid status.")
+        self._transport_connected = data.get("connected") is True
         return data
 
     @property
     def connected(self) -> bool:
-        return self._closing is None and self.child.process.returncode is None
+        return self._transport_connected and self._closing is None and self.child.process.returncode is None
 
     async def _release_inputs(self) -> None:
         try:
@@ -245,7 +349,12 @@ class RemotePythonRuntime:
         stderr = asyncio.create_task(drain_tail(helper.stderr))
         try:
             try:
-                await asyncio.wait_for(helper.wait(), self.release_timeout_ms / 1000)
+                payload = json.dumps({"protocol": self.environment["REMOTE_COMPUTER_BACKEND"],
+                                      "identities": sorted(self._pending_identities)}) + "\n"
+                async def deliver_and_wait() -> None:
+                    await helper.write(payload.encode())
+                    await helper.wait()
+                await asyncio.wait_for(deliver_and_wait(), self.release_timeout_ms / 1000)
             except TimeoutError as error:
                 raise RemotePythonRuntimeError(
                     f"Input release exceeded {self.release_timeout_ms}ms.",
@@ -263,6 +372,11 @@ class RemotePythonRuntime:
         finally:
             await helper.close()
             await asyncio.gather(stdout, stderr, return_exceptions=True)
+        if self._identity_error is not None:
+            raise RemotePythonRuntimeError(
+                "Input identities were incomplete; known inputs were released but full release cannot be confirmed.",
+                "input_release_failed",
+            ) from self._identity_error
 
     async def _close(self) -> None:
         failure: Exception | None = None
@@ -272,10 +386,12 @@ class RemotePythonRuntime:
             failure = error
         finally:
             await self._stderr
-        if self._input_may_be_held:
+            await self._stdout
+        if self._input_may_be_held or self._identity_error is not None:
             await self._release_inputs()
         if failure is not None:
             raise failure
+        self._pending_identities.clear()
 
     async def close(self) -> None:
         if self._closing is None:
@@ -299,11 +415,26 @@ async def launch_remote_python_runtime(
     directory = Path(__file__).parent
     environment = child_environment()
     environment.update(_config_environment(config))
-    try:
-        child = await OwnedProcess.spawn(
+    spawning = asyncio.create_task(
+        OwnedProcess.spawn(
             [python_path, "-u", str(worker_path or directory / "worker.py")],
             env=environment,
         )
+    )
+    try:
+        child = await asyncio.shield(spawning)
+    except asyncio.CancelledError:
+        async def reap_spawn() -> None:
+            try:
+                spawned = await spawning
+            except Exception:  # noqa: BLE001 - spawn failed without returning a child
+                return
+            await spawned.close()
+
+        # Spawn may have created an OS process before yielding its handle. Keep
+        # that operation alive and reap its result before declaring cancellation.
+        await _complete_startup_cleanup(reap_spawn())
+        raise
     except Exception as error:
         raise RemotePythonRuntimeError(
             f"Could not start remote Python: {error}. Run uv sync and restart the runner."
@@ -330,5 +461,5 @@ async def launch_remote_python_runtime(
         runtime.height = int(ready["height"])
         return runtime
     except BaseException:
-        await runtime.close()
+        await _complete_startup_cleanup(runtime.close())
         raise

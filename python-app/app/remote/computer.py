@@ -22,9 +22,10 @@ from PIL import Image
 from ..actions import Point, parse_computer_action
 from ..backends import BackendConfig, load_backend_config
 from ..computer_session import ComputerSession
-from .input_compat import integer, perform, seconds
+from .input_compat import integer, normalize_button, perform, seconds
 
 T = TypeVar("T")
+Coordinate = int | float | Sequence[int | float] | None
 Size = namedtuple("Size", "width height")
 Position = namedtuple("Position", "x y")
 
@@ -33,6 +34,11 @@ class RemoteComputer:
     """Blocking, code-tool-friendly access to one remote desktop connection."""
 
     PAUSE = 0.1
+    LEFT = "left"
+    MIDDLE = "middle"
+    RIGHT = "right"
+    PRIMARY = "primary"
+    SECONDARY = "secondary"
 
     @staticmethod
     def linear(value: float) -> float:
@@ -97,7 +103,7 @@ class RemoteComputer:
     def status(self) -> dict[str, Any]:
         async def read() -> dict[str, Any]:
             return {**self._session.status(),
-                    "inputHeld": bool(self._session._held_keys or self._session._held_buttons)}
+                    "inputHeld": self._session.input_held}
 
         return self._call(read())
 
@@ -116,57 +122,79 @@ class RemoteComputer:
             image.save(imageFilename)
         return image
 
-    def move_to(self, x: int | None = None, y: int | None = None, duration: float = 0,
+    def move_to(self, x: Coordinate = None, y: int | None = None, duration: float = 0,
                 tween: Callable[[float], float] = linear) -> None:
         self._input("move", x=x, y=y, duration=seconds(duration), tween=tween)
 
     moveTo = move_to
 
-    def position(self, x: int | None = None, y: int | None = None) -> tuple[int, int]:
+    def position(self, x: float | None = None, y: float | None = None) -> tuple[int, int]:
         current = self._call(self._session.position())
-        return Position(current[0] if x is None else x, current[1] if y is None else y)
+        return Position(current[0] if x is None else int(x), current[1] if y is None else int(y))
 
-    def move(self, xOffset: int | None = None, yOffset: int | None = None, duration: float = 0,
+    def move(self, xOffset: Coordinate = None, yOffset: int | None = None, duration: float = 0,
              tween: Callable[[float], float] = linear) -> None:
         self._input("move", x=xOffset, y=yOffset, relative=True, duration=seconds(duration), tween=tween)
 
     moveRel = move
 
-    def onScreen(self, x: int, y: int) -> bool:
-        return 0 <= x < self.width and 0 <= y < self.height
+    def onScreen(self, x: Any, y: int | None = None) -> bool:
+        if isinstance(x, (tuple, list)) and len(x) == 2 and y is None:
+            x, y = x
+        if x is None or y is None:
+            current_x, current_y = self.position()
+            x = current_x if x is None else x
+            y = current_y if y is None else y
+        return 0 <= int(x) < self.width and 0 <= int(y) < self.height
 
     def click(
         self,
-        x: int | None = None,
+        x: Coordinate = None,
         y: int | None = None,
         clicks: int = 1,
         interval: float = 0.0,
-        button: str = "left",
+        button: str | int = "left",
+        duration: float = 0,
+        tween: Callable[[float], float] = linear,
     ) -> None:
-        self._input("click", x=x, y=y, button=button, clicks=max(0, integer(clicks)), interval=seconds(interval))
+        self._input("click", x=x, y=y, button=normalize_button(button), clicks=max(0, integer(clicks)),
+                    interval=seconds(interval), duration=seconds(duration), tween=tween)
 
-    def doubleClick(self, x: int | None = None, y: int | None = None, interval: float = 0,
-                    button: str = "left") -> None:
-        self.click(x, y, 2, interval, button)
+    def doubleClick(self, x: Coordinate = None, y: int | None = None, interval: float = 0,
+                    button: str | int = "left", duration: float = 0,
+                    tween: Callable[[float], float] = linear) -> None:
+        self.click(x, y, 2, interval, button, duration, tween)
 
-    def tripleClick(self, x: int | None = None, y: int | None = None, interval: float = 0,
-                    button: str = "left") -> None:
-        self.click(x, y, 3, interval, button)
+    def tripleClick(self, x: Coordinate = None, y: int | None = None, interval: float = 0,
+                    button: str | int = "left", duration: float = 0,
+                    tween: Callable[[float], float] = linear) -> None:
+        self.click(x, y, 3, interval, button, duration, tween)
 
-    def rightClick(self, x: int | None = None, y: int | None = None) -> None:
-        self.click(x, y, button="right")
+    def rightClick(self, x: Coordinate = None, y: int | None = None, interval: float = 0.0, duration: float = 0,
+                   tween: Callable[[float], float] = linear) -> None:
+        self.click(x, y, button="right", interval=interval, duration=duration, tween=tween)
 
-    def mouseDown(self, x: int | None = None, y: int | None = None, button: str = "left") -> None:
-        self._input("mouse", x=x, y=y, button=button, pressed=True)
+    def leftClick(self, x: Coordinate = None, y: int | None = None, interval: float = 0.0, duration: float = 0,
+                  tween: Callable[[float], float] = linear) -> None:
+        self.click(x, y, button="left", interval=interval, duration=duration, tween=tween)
 
-    def mouseUp(self, x: int | None = None, y: int | None = None, button: str = "left") -> None:
-        self._input("mouse", x=x, y=y, button=button, pressed=False)
+    def middleClick(self, x: Coordinate = None, y: int | None = None, interval: float = 0.0, duration: float = 0,
+                    tween: Callable[[float], float] = linear) -> None:
+        self.click(x, y, button="middle", interval=interval, duration=duration, tween=tween)
+
+    def mouseDown(self, x: Coordinate = None, y: int | None = None, button: str | int = "left",
+                  duration: float = 0, tween: Callable[[float], float] = linear) -> None:
+        self._input("mouse", x=x, y=y, button=normalize_button(button), pressed=True)
+
+    def mouseUp(self, x: Coordinate = None, y: int | None = None, button: str | int = "left",
+                duration: float = 0, tween: Callable[[float], float] = linear) -> None:
+        self._input("mouse", x=x, y=y, button=normalize_button(button), pressed=False)
 
     def drag_path(
         self,
         path: Sequence[tuple[int, int] | dict[str, int] | Point],
         *,
-        button: str = "left",
+        button: str | int = "left",
         duration: float = 0.3,
     ) -> None:
         points = [
@@ -175,43 +203,48 @@ class RemoteComputer:
             else Point.model_validate({"x": item[0], "y": item[1]} if isinstance(item, tuple) else item)
             for item in path
         ]
-        self._call(self._session.drag(points, button, round(duration * 1000)))
+        self._call(self._session.drag(points, normalize_button(button), round(duration * 1000)))
 
     def drag_to(
         self,
-        x: int | None = None,
+        x: Coordinate = None,
         y: int | None = None,
         duration: float = 0,
         tween: Callable[[float], float] = linear,
-        button: str = "left",
+        button: str | int = "left",
         steps: int = 12,
     ) -> None:
         if not 1 <= steps <= 99:
             raise ValueError("steps must be between 1 and 99")
-        self._input("drag", x=x, y=y, duration=seconds(duration), tween=tween, button=button)
+        self._input("drag", x=x, y=y, duration=seconds(duration), tween=tween,
+                    button=normalize_button(button))
 
     dragTo = drag_to
 
-    def drag(self, xOffset: Any, yOffset: int | None = None, duration: float = 0,
-             tween: Callable[[float], float] = linear, button: str = "left") -> None:
-        if isinstance(xOffset, (list, tuple)) and yOffset is None:
-            self.drag_path(xOffset, duration=duration, button=button)
+    def drag(self, xOffset: Any = None, yOffset: int | None = None, duration: float = 0,
+             tween: Callable[[float], float] = linear, button: str | int = "left") -> None:
+        selected = normalize_button(button)
+        if isinstance(xOffset, (list, tuple)) and xOffset and isinstance(xOffset[0], (list, tuple, dict, Point)) and yOffset is None:
+            self.drag_path(xOffset, duration=duration, button=selected)
         else:
             self._input("drag", x=xOffset, y=yOffset, relative=True, duration=seconds(duration),
-                        tween=tween, button=button)
+                        tween=tween, button=selected)
 
     dragRel = drag
 
-    def scroll(self, clicks: int, x: int | None = None, y: int | None = None) -> None:
+    def scroll(self, clicks: int, x: Coordinate = None, y: int | None = None) -> None:
         self._input("scroll", x=x, y=y, clicks=integer(clicks))
 
     vscroll = scroll
 
-    def hscroll(self, clicks: int, x: int | None = None, y: int | None = None) -> None:
+    def hscroll(self, clicks: int, x: Coordinate = None, y: int | None = None) -> None:
         self._input("scroll", x=x, y=y, clicks=integer(clicks), horizontal=True)
 
-    def write(self, text: str, interval: float = 0) -> None:
-        self._input("write", text=text, interval=seconds(interval))
+    def write(self, text: str | Sequence[str], interval: float = 0) -> None:
+        if isinstance(text, str):
+            self._input("write", text=text, interval=seconds(interval))
+        else:
+            self._input("write_keys", keys=list(text), interval=seconds(interval))
 
     type_text = write
     typewrite = write
@@ -231,10 +264,10 @@ class RemoteComputer:
                     presses=max(0, integer(presses)), interval=seconds(interval))
 
     def keyDown(self, key: str) -> None:
-        self._input("key", key=key.lower(), pressed=True)
+        self._input("key", key=key.lower() if len(key) > 1 else key, pressed=True)
 
     def keyUp(self, key: str) -> None:
-        self._input("key", key=key.lower(), pressed=False)
+        self._input("key", key=key.lower() if len(key) > 1 else key, pressed=False)
 
     @contextmanager
     def hold(self, keys: str | Sequence[str]) -> Iterator[None]:
@@ -246,7 +279,7 @@ class RemoteComputer:
             yield
         finally:
             errors = []
-            for key in reversed(pressed):
+            for key in pressed:
                 try:
                     self.keyUp(key)
                 except Exception as error:  # noqa: BLE001 - release every held key

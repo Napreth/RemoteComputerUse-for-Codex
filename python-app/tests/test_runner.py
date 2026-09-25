@@ -117,7 +117,9 @@ async def test_overlapping_stop_and_shutdown_wait_for_one_cleanup(manager_factor
     assert [event["type"] for event in final["events"]].count("run_cancelled") == 1
 
 
-@pytest.mark.parametrize("code,blocked", [("cleanup_failed", False), ("desktop_cleanup_failed", True)])
+@pytest.mark.parametrize("code,blocked", [
+    ("cleanup_failed", False), ("desktop_cleanup_failed", True), ("remote_cleanup_failed", True),
+])
 async def test_stop_reports_cleanup_failure_and_desktop_lockout(manager_factory, code, blocked):
     started = asyncio.Event()
     async def executor(context):
@@ -152,6 +154,19 @@ async def test_failsafe_cancellation_and_missing_completion(manager_factory):
     second = await manager.start_run(request())
     failed = await wait_for_run_status(manager, second["run"]["id"], "failed")
     assert "without completing" in failed["run"]["summary"]["notes"][0]
+
+
+async def test_remote_cleanup_failure_without_stop_blocks_new_runs(manager_factory):
+    async def executor(context):
+        await context.complete_run(notes=[])
+        raise RunnerCoreError("Input release failed", code="remote_cleanup_failed")
+
+    manager = manager_factory(executor)
+    detail = await manager.start_run(request())
+    final = await wait_for_run_status(manager, detail["run"]["id"], "failed")
+    assert "remote_cleanup_failed" in str(final["run"]["summary"]["notes"])
+    with pytest.raises(RunnerCoreError, match="New runs are blocked"):
+        await manager.start_run(request())
 
 
 async def test_cleanup_error_after_complete_never_publishes_success(manager_factory):

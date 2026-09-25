@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Hashable
 from typing import Any
 
 from .actions import (
@@ -31,12 +31,17 @@ class ComputerSession:
         self._config: BackendConfig | None = None
         self._lock = asyncio.Lock()
         self._position = (0, 0)
-        self._held_keys: set[str] = set()
+        self._held_keys: set[Hashable] = set()
         self._held_buttons: set[str] = set()
+        self._input_uncertain = False
 
     @property
     def connected(self) -> bool:
         return self._backend is not None and self._backend.connected
+
+    @property
+    def input_held(self) -> bool:
+        return bool(self._held_keys or self._held_buttons or self._input_uncertain)
 
     def status(self) -> dict[str, Any]:
         backend = self._backend
@@ -55,7 +60,11 @@ class ComputerSession:
             old_backend, self._backend = self._backend, None
             self._config = None
             if old_backend is not None:
-                await old_backend.disconnect()
+                try:
+                    if self.input_held:
+                        await self._release_backend_inputs(old_backend)
+                finally:
+                    await old_backend.disconnect()
             factory = self._factories.get(config.kind)
             if factory is None:
                 raise ValueError(f"no backend is registered for {config.kind!r}")
@@ -70,6 +79,7 @@ class ComputerSession:
                 raise
             self._backend = backend
             self._config = config
+            self._position = (0, 0)
             return self.status()
 
     async def disconnect(self) -> None:
@@ -78,10 +88,8 @@ class ComputerSession:
             self._config = None
             if backend is not None:
                 try:
-                    if self._held_keys or self._held_buttons:
-                        await backend.release_inputs()
-                        self._held_keys.clear()
-                        self._held_buttons.clear()
+                    if self.input_held:
+                        await self._release_backend_inputs(backend)
                 finally:
                     await backend.disconnect()
 
@@ -103,39 +111,59 @@ class ComputerSession:
         async with self._lock:
             return self._position
 
-
     async def _move(self, x: int, y: int) -> None:
         await self._require_backend().move(x, y)
         self._position = (x, y)
 
-    async def click(self, x: int, y: int, button: str = "left", count: int = 1) -> None:
+    async def _mouse_button(self, x: int, y: int, button: str, pressed: bool) -> None:
+        if pressed:
+            self._held_buttons.add(button)
+        await self._require_backend().mouse_button(x, y, button, pressed)
+        if not pressed:
+            self._held_buttons.discard(button)
+
+    async def click(self, x: int | None = None, y: int | None = None, button: str = "left", count: int = 1) -> None:
         async with self._lock:
+            x = self._position[0] if x is None else x
+            y = self._position[1] if y is None else y
             await self._click(x, y, button, count)
 
     async def _click(self, x: int, y: int, button: str = "left", count: int = 1) -> None:
         if count not in {1, 2}:
             raise ValueError("click count must be 1 or 2")
-        backend = self._require_backend()
-        await backend.move(x, y)
+        await self._move(x, y)
         for index in range(count):
             try:
                 # A cancelled button-down may already have reached the server.
                 # Enter the protected region before sending it so a release is
                 # attempted even when the down call itself is interrupted.
-                await backend.mouse_button(x, y, button, True)
+                await self._mouse_button(x, y, button, True)
             except BaseException:
                 try:
-                    await backend.mouse_button(x, y, button, False)
+                    await self._mouse_button(x, y, button, False)
                 except BaseException:  # Preserve the first release failure.
                     logger.warning("Mouse-button release after button-down failure also failed", exc_info=True)
                 raise
             else:
-                await backend.mouse_button(x, y, button, False)
+                await self._mouse_button(x, y, button, False)
             if index + 1 < count:
                 await asyncio.sleep(0.08)
 
     async def drag(self, path: list[Point], button: str = "left", duration_ms: int = 300) -> None:
         async with self._lock:
+            await self._drag(path, button, duration_ms)
+
+    async def drag_to(
+        self, x: int, y: int, button: str = "left", duration_ms: int = 300, steps: int = 12,
+    ) -> None:
+        if not 1 <= steps <= 99:
+            raise ValueError("steps must be between 1 and 99")
+        async with self._lock:
+            start_x, start_y = self._position
+            path = [Point(
+                x=round(start_x + (x - start_x) * index / steps),
+                y=round(start_y + (y - start_y) * index / steps),
+            ) for index in range(steps + 1)]
             await self._drag(path, button, duration_ms)
 
     async def _drag(self, path: list[Point], button: str = "left", duration_ms: int = 300) -> None:
@@ -146,50 +174,78 @@ class ComputerSession:
         points = [(point.x, point.y) for point in path]
         delay = duration_ms / 1000 / max(1, len(points) - 1)
         backend = self._require_backend()
+        # Reject the entire path before pressing a button. In particular, an
+        # out-of-bounds point must never become the coordinate used for release.
+        for x, y in points:
+            backend.validate_point(x, y)
         start_x, start_y = points[0]
-        await backend.move(start_x, start_y)
+        await self._move(start_x, start_y)
         end_x, end_y = start_x, start_y
         try:
             # Treat the button as potentially pressed before awaiting the down
             # event; cancellation can arrive after the server observes it.
-            await backend.mouse_button(start_x, start_y, button, True)
-            for end_x, end_y in points[1:]:
-                await backend.move(end_x, end_y)
+            await self._mouse_button(start_x, start_y, button, True)
+            for x, y in points[1:]:
+                await self._move(x, y)
+                end_x, end_y = x, y
                 if delay:
                     await asyncio.sleep(delay)
         except BaseException:
             try:
-                await backend.mouse_button(end_x, end_y, button, False)
+                await self._mouse_button(end_x, end_y, button, False)
             except BaseException:  # Preserve the drag failure.
                 logger.warning("Mouse-button release after drag failure also failed", exc_info=True)
             raise
         else:
-            await backend.mouse_button(end_x, end_y, button, False)
+            await self._mouse_button(end_x, end_y, button, False)
 
-    async def scroll(self, x: int, y: int, delta_x: int, delta_y: int) -> None:
+    async def scroll(self, x: int | None, y: int | None, delta_x: int, delta_y: int) -> None:
         async with self._lock:
+            x = self._position[0] if x is None else x
+            y = self._position[1] if y is None else y
             await self._scroll(x, y, delta_x, delta_y)
 
     async def _scroll(self, x: int, y: int, delta_x: int, delta_y: int) -> None:
-        await self._require_backend().scroll(x, y, delta_x, delta_y)
+        backend = self._require_backend()
+        backend.validate_scroll(delta_x, delta_y)
+        await backend.scroll(x, y, delta_x, delta_y)
+        self._position = (x, y)
 
     async def type_text(self, text: str) -> None:
         async with self._lock:
             await self._type_text(text)
 
     async def _type_text(self, text: str) -> None:
-        await self._require_backend().type_text(text)
+        backend = self._require_backend()
+        backend.validate_text(text)
+        # Only confirmed completion can restore the earlier uncertainty state.
+        # Failure or cancellation may occur after a remote key-down was sent.
+        pending = self._input_uncertain
+        self._input_uncertain = True
+        await backend.type_text(text)
+        self._input_uncertain = pending
 
     async def keypress(self, keys: list[str]) -> None:
         async with self._lock:
             await self._keypress(keys)
 
     async def _keypress(self, keys: list[str]) -> None:
-        await self._require_backend().key_chord(keys)
+        backend = self._require_backend()
+        backend.validate_key_chord(keys)
+        pending = self._input_uncertain
+        self._input_uncertain = True
+        await backend.key_chord(keys)
+        self._input_uncertain = pending
 
     async def release_inputs(self) -> None:
         async with self._lock:
-            await self._require_backend().release_inputs()
+            await self._release_backend_inputs(self._require_backend())
+
+    async def _release_backend_inputs(self, backend: ComputerBackend) -> None:
+        await backend.release_inputs()
+        self._held_keys.clear()
+        self._held_buttons.clear()
+        self._input_uncertain = False
 
     async def run_actions(self, actions: list[ComputerAction]) -> bytes:
         if not actions or len(actions) > 50:
