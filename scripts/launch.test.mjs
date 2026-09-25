@@ -8,10 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { assertPortAvailable, launchConfiguration, requestServiceShutdown, waitForBackend } from "./launch.mjs";
 
 test("launch choice selects exactly one runner and one console identity", () => {
-  const js = launchConfiguration("javascript", false, {});
   const py = launchConfiguration("python", true, {});
-  assert.equal(js.env.CUA_BACKEND, "javascript");
-  assert.equal(js.runnerBaseUrl, "http://127.0.0.1:4001");
+  assert.throws(() => launchConfiguration("javascript"), /retired/);
   assert.equal(py.env.CUA_BACKEND, "python");
   assert.equal(py.runnerBaseUrl, "http://127.0.0.1:4041");
   assert.deepEqual(py.args, ["-m", "app"]);
@@ -53,7 +51,7 @@ test("occupied coordination port rejects a launch before its runner starts", asy
     coordination.once("error", reject);
     coordination.listen(4050, "127.0.0.1", resolve);
   });
-  const child = spawn(process.execPath, [fileURLToPath(new URL("./launch.mjs", import.meta.url)), "javascript"], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./launch.mjs", import.meta.url)), "python"], {
     env: { ...process.env, OPENAI_API_KEY: "" }, stdio: ["ignore", "pipe", "pipe"],
   });
   const exited = once(child, "exit");
@@ -81,12 +79,12 @@ test("managed shutdown closes the pipe instead of sending a forceful Windows sig
   assert.deepEqual(calls, ["eof"]);
 });
 
-test("managed JavaScript backend exits gracefully when its launcher closes stdin", async () => {
+test("managed Python backend exits gracefully when its launcher closes stdin", async () => {
   const portProbe = createServer();
   await new Promise(resolve => portProbe.listen(0, "127.0.0.1", resolve));
   const port = portProbe.address().port;
   await new Promise(resolve => portProbe.close(resolve));
-  const config = launchConfiguration("javascript", false, {
+  const config = launchConfiguration("python", false, {
     ...process.env, PORT: String(port), HOST: "127.0.0.1", RUNNER_BASE_URL: `http://127.0.0.1:${port}`,
     CUA_MANAGED_LAUNCH: "1", OPENAI_API_KEY: "",
   });
@@ -95,7 +93,7 @@ test("managed JavaScript backend exits gracefully when its launcher closes stdin
   let stderr = "";
   child.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
   try {
-    await waitForBackend(config.runnerBaseUrl, "javascript", { isAlive: () => child.exitCode === null && child.signalCode === null });
+    await waitForBackend(config.runnerBaseUrl, "python", { isAlive: () => child.exitCode === null && child.signalCode === null });
     requestServiceShutdown(child, true);
     const status = await Promise.race([exited, delay(5_000, "timeout", { ref: false })]);
     assert.deepEqual(status, [0, null], stderr);

@@ -1,20 +1,18 @@
 # Shared operator console
 
-One Next.js console displays controls, agent activity, screenshots, and replay links for either backend. Select the backend when launching from the repository root:
+The retained Next.js console displays controls, agent activity, screenshots, and replay links for the Python RDP/VNC runner. Launch it from the repository root:
 
 ```bash
-pnpm dev:js
-# After stopping JavaScript:
 pnpm dev:python
 ```
 
-Both choices use [http://127.0.0.1:3000](http://127.0.0.1:3000). The subheader says **JavaScript / Playwright** or **Python / PyAutoGUI**. There is no in-app backend selector; bare `pnpm dev` prints the two launch commands. Only one backend can run at a time.
+The Console uses [http://127.0.0.1:3000](http://127.0.0.1:3000) and shows **Python / Remote Desktop**. The original JavaScript/Playwright backend is retired; historical replay contracts remain readable.
 
 ## Configuration and startup
 
-The root launcher sets `CUA_BACKEND=javascript|python` and one `RUNNER_BASE_URL`, defaulting to JavaScript on **4001** or Python on **4041**. It honors `HOST`/`PORT` and an explicit `RUNNER_BASE_URL` override. The root `.env` and launching shell configure model defaults; the console reads them through `/api/capabilities`.
+The root launcher sets `CUA_BACKEND=python` and one `RUNNER_BASE_URL`, defaulting to port **4041**. It honors `HOST`/`PORT` and an explicit `RUNNER_BASE_URL` override. The root `.env` and launching shell configure model defaults; the console reads them through `/api/capabilities`.
 
-[`app/page.tsx`](app/page.tsx) checks capabilities against the expected backend, then loads its scenario catalog and active run. Failed discovery keeps Start unavailable. JavaScript exposes headless/visible browser controls; Python shows a fixed visible desktop. The console sends `X-CUA-Backend` on JSON requests; the backend rejects mismatches before performing actions.
+[`app/page.tsx`](app/page.tsx) checks capabilities against the expected backend, then loads its scenario catalog and active run. Failed discovery keeps Start unavailable. Python shows a fixed remote desktop mode. The console sends `X-CUA-Backend` on JSON requests; the backend rejects mismatches before performing actions.
 
 The Next.js routes and global styles live in `app/`. The interactive controls and run state live in `components/`; `tests/` covers the console and request recovery.
 
@@ -38,7 +36,7 @@ From the repository root:
 pnpm --filter @cua-sample/console test
 pnpm --filter @cua-sample/console typecheck
 pnpm build
-pnpm start:js
+pnpm start:python
 ```
 
-After shutting down the launch, use `pnpm start:python` to run the same production console with the installed Python backend. Ctrl+C requests graceful cleanup of the selected backend and console. See the [root guide](../README.md) for installation and the backend guides for live runs.
+Ctrl+C requests graceful cleanup of the selected backend and console. See the [root guide](../README.md) for installation and the backend guides for live runs.

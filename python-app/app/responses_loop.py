@@ -57,11 +57,12 @@ def build_code_tool_definitions(target: str) -> list[dict[str, Any]]:
                         "description": "\n".join(
                             [
                                 f"Python to execute against {target}. Python globals survive between calls.",
-                                "Available globals: computer, Image, log(value), and display(image).",
+                                "Available globals: pyautogui (remote compatibility API), computer (the same remote input API), Image, log(value), and display(image).",
                                 "Start by calling display(computer.screenshot()). Screenshots are Pillow images and use the same pixel coordinates as input.",
                                 "computer provides size, screenshot, move_to, click, drag, drag_to, scroll, write, press, keypress/hotkey, status, and run_actions.",
                                 "Use ordinary Python control flow to combine actions, inspect screenshots, and loop within one call. run_actions accepts validated action dictionaries and returns the final screenshot.",
                                 "RDP/VNC are transports, not guest OS declarations. Use only guest shortcuts justified by what you observe.",
+                                "scroll uses wheel clicks: positive is up, negative is down. press accepts sequential keys and presses/interval; hotkey holds a chord. Operate only the selected lab.",
                             ]
                         ),
                     }

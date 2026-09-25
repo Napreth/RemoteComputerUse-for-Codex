@@ -99,6 +99,7 @@ class RemotePythonRuntime:
         self._sequence = 0
         self._busy = False
         self._input_may_be_held = False
+        self._reported_input_held = False
         self._closing: asyncio.Task[None] | None = None
         self._stderr = asyncio.create_task(drain_tail(child.stderr))
         self._watcher = asyncio.create_task(self._watch())
@@ -154,6 +155,8 @@ class RemotePythonRuntime:
                     raise ValueError("Unexpected startup response ID.")
             except (TypeError, ValueError, UnicodeError) as error:
                 raise RemotePythonRuntimeError("Python worker returned invalid JSON or response ID.") from error
+            if isinstance(value.get("inputHeld"), bool):
+                self._reported_input_held = value["inputHeld"]
             if "error" in value:
                 raise RemotePythonRuntimeError(value["error"])
             return value
@@ -179,13 +182,13 @@ class RemotePythonRuntime:
             assert_active(self.signal)
             assert_active(signal)
             self._sequence += 1
-            self._input_may_be_held = input_may_be_held
+            self._input_may_be_held = self._input_may_be_held or input_may_be_held
             request = json.dumps({"id": self._sequence, "operation": operation, **payload}) + "\n"
             await await_active(self.child.write(request.encode()), signal or self.signal)
             value = await self._receive(self._sequence, self.execution_timeout_ms, signal)
             assert_active(self.signal)
             assert_active(signal)
-            self._input_may_be_held = False
+            self._input_may_be_held = self._reported_input_held
             return value
         except BaseException:
             try:

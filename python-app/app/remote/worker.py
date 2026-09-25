@@ -13,6 +13,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 from PIL import Image
@@ -61,7 +62,8 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
     def display(value: Image.Image | bytes) -> None:
         nonlocal image_bytes
         item = image_output(value)
-        image_bytes += len(item["image_url"])
+        encoded = item["image_url"].removeprefix("data:image/png;base64,")
+        image_bytes += len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
         if image_bytes > 8 * 1024 * 1024 or len(output) >= 250:
             raise ValueError("Python image output exceeds its size limit.")
         output.append(item)
@@ -113,7 +115,26 @@ def serve_requests(namespace: dict[str, Any], stream: Any) -> None:
                     "message": f"Unsupported worker operation: {operation!r}.",
                 }
             }
-        emit({"id": request.get("id"), **result})
+        input_held = namespace["computer"].status().get("inputHeld") is True
+        emit({"id": request.get("id"), **result, "inputHeld": input_held})
+
+
+class RemotePyAutoGUI(ModuleType):
+    """Route imports to the remote facade without importing host input APIs."""
+
+    def __init__(self, computer: RemoteComputer) -> None:
+        super().__init__("pyautogui")
+        self.__dict__["_computer"] = computer
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.__dict__["_computer"], name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "PAUSE":
+            setattr(self.__dict__["_computer"], name, value)
+        else:
+            super().__setattr__(name, value)
+
 
 
 def main() -> None:
@@ -124,7 +145,9 @@ def main() -> None:
         # the bounded emergency-release helper.
         os.environ.pop("REMOTE_COMPUTER_RDP_PASSWORD", None)
         os.environ.pop("REMOTE_COMPUTER_VNC_PASSWORD", None)
-        namespace = {"__builtins__": __builtins__, "computer": computer, "Image": Image}
+        pyautogui = RemotePyAutoGUI(computer)
+        sys.modules["pyautogui"] = pyautogui
+        namespace = {"__builtins__": __builtins__, "computer": computer, "pyautogui": pyautogui, "Image": Image}
         emit(
             {
                 "ready": True,

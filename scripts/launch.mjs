@@ -16,7 +16,7 @@ export function requestServiceShutdown(child, managed) {
 }
 
 export function launchConfiguration(backend, production = false, env = process.env) {
-  if (!["javascript", "python"].includes(backend)) throw new Error("Choose pnpm dev:js or pnpm dev:python.");
+  if (backend !== "python") throw new Error("Choose pnpm dev:python. The upstream JavaScript backend is retired.");
   const port = Number(env.PORT ?? (backend === "python" ? 4041 : 4001));
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer between 1 and 65535.");
   const host = env.HOST ?? "127.0.0.1";
@@ -87,18 +87,18 @@ export async function waitForBackend(baseUrl, backend, { signal, isAlive = () =>
 async function main() {
   const [backend, ...options] = process.argv.slice(2);
   if (!backend) {
-    console.log("Choose one backend:\n  pnpm dev:js       JavaScript / Playwright\n  pnpm dev:python   Python / PyAutoGUI");
+    console.log("Use pnpm dev:python for the RDP/VNC runner and Console.");
     return;
   }
-  if (!["javascript", "python"].includes(backend) || options.some(option => option !== "--production")) {
-    throw new Error("Use pnpm dev:js, pnpm dev:python, pnpm start:js, or pnpm start:python.");
+  if (backend !== "python" || options.some(option => option !== "--production")) {
+    throw new Error("Use pnpm dev:python or pnpm start:python. The upstream JavaScript backend is retired.");
   }
   const envPath = join(root, ".env");
   if (existsSync(envPath)) process.loadEnvFile(envPath);
   const config = launchConfiguration(backend, options.includes("--production"));
   config.env.CUA_INSTANCE_ID = randomUUID();
   if (backend === "python" && !existsSync(config.command)) {
-    throw new Error("Python environment is missing. Run pnpm python:install, then pnpm python:playwright:install.");
+    throw new Error("Python environment is missing. Run pnpm python:install.");
   }
   await preflightLaunchPorts(config);
   const controller = new AbortController();

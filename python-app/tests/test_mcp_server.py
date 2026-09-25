@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,10 +17,10 @@ async def test_manifest_command_starts_stdio_server() -> None:
     assert definition["command"] == "uv"
     assert definition["args"] == ["run", "--frozen", "--project", "./python-app", "remote-computer-use"]
 
-    executable = root / "python-app" / ".venv" / "Scripts" / "remote-computer-use.exe"
     parameters = StdioServerParameters(
-        command=str(executable),
-        cwd=root,
+        command=sys.executable,
+        args=["-m", "app.mcp_server"],
+        cwd=root / "python-app",
     )
 
     async with (

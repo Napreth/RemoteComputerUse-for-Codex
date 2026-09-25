@@ -261,6 +261,14 @@ class RDPBackend(ComputerBackend):
             _unwrap(await connection.send_key_char(character, False), "RDP key release")
             await asyncio.sleep(0.001)
 
+    async def key_event(self, key: str, pressed: bool) -> None:
+        normalized = key.lower().replace("_", "")
+        if normalized not in SCANCODES:
+            raise ValueError(f"unsupported RDP key name: {key}")
+        scancode, extended = SCANCODES[normalized]
+        _unwrap(await self._require_connection().send_key_scancode(scancode, pressed, extended), "RDP key event")
+
+
     async def key_chord(self, keys: list[str]) -> None:
         if not keys or len(keys) > 8:
             raise ValueError("keypress requires between 1 and 8 keys")
@@ -304,10 +312,9 @@ class RDPBackend(ComputerBackend):
                 _unwrap(await connection.send_mouse(button, 0, 0, False), "RDP mouse release")
             except BaseException as error:  # noqa: BLE001 - attempt every release
                 errors.append(error)
-        for key in ("ctrl", "shift", "alt", "win"):
-            scancode, extended = SCANCODES[key]
+        for scancode, extended in sorted(set(SCANCODES.values())):
             try:
-                _unwrap(await connection.send_key_scancode(scancode, False, extended), f"RDP release {key}")
+                _unwrap(await connection.send_key_scancode(scancode, False, extended), "RDP release key")
             except BaseException as error:  # noqa: BLE001 - attempt every release
                 errors.append(error)
         if errors:

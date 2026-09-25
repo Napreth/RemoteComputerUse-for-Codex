@@ -43,6 +43,10 @@ class ComputerBackend(ABC):
     @abstractmethod
     async def key_chord(self, keys: list[str]) -> None: ...
 
+    async def key_event(self, key: str, pressed: bool) -> None:
+        """Send one physical key transition for persistent Python key holds."""
+        raise NotImplementedError("this backend does not support individual key transitions")
+
     @abstractmethod
     async def release_inputs(self) -> None:
         """Best-effort release of buttons and modifier keys after interruption."""

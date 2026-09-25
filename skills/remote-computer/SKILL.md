@@ -15,6 +15,12 @@ VNC backend is an implementation detail; do not substitute host automation.
    code call when useful. The `computer` global provides `move_to`, `click`,
    `drag`, `drag_to`, `scroll`, `write`, `press`, `keypress`/`hotkey`, `status`,
    `screenshot`, and `run_actions`.
+   `pyautogui` and `import pyautogui` resolve to the same remote compatibility
+   API. Python `scroll` uses wheel clicks (positive up, negative down); atomic
+   scroll actions use deltas (positive down/right, 120 per click). `press` sends
+   sequential keys; `hotkey` holds a chord. Common duration, interval, repeat,
+   key/button hold and screenshot-file arguments are supported; see
+   `docs/upstream-compatibility.md` for the explicit limits.
 4. Treat screenshot pixels as the input coordinate system. The atomic
    `computer_*` tools remain available for simple one-off operations, but do
    not turn a multi-step task into one model turn per input event.

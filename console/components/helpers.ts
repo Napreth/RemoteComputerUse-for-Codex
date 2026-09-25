@@ -15,7 +15,7 @@ import type {
 
 export function browserHelpText(backendId: "javascript" | "python") {
   return backendId === "python"
-    ? "The app opens a visible browser and uses PyAutoGUI to control your desktop's mouse and keyboard. Keep the lab window in front during a run."
+    ? "The app operates the configured remote desktop over RDP or VNC. Keep the lab visible in the guest. The host mouse and keyboard are not controlled."
     : "Headless runs the browser off-screen. Visible opens the browser window so you can watch the session live as it runs.";
 }
 export const turnBudgetHelpText =

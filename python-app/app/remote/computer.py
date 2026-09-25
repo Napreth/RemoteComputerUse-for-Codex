@@ -11,7 +11,10 @@ from __future__ import annotations
 import asyncio
 import io
 import threading
-from collections.abc import Coroutine, Sequence
+import time
+from collections import namedtuple
+from collections.abc import Callable, Coroutine, Iterator, Sequence
+from contextlib import contextmanager
 from typing import Any, TypeVar
 
 from PIL import Image
@@ -19,12 +22,25 @@ from PIL import Image
 from ..actions import Point, parse_computer_action
 from ..backends import BackendConfig, load_backend_config
 from ..computer_session import ComputerSession
+from .input_compat import integer, perform, seconds
 
 T = TypeVar("T")
+Size = namedtuple("Size", "width height")
+Position = namedtuple("Position", "x y")
 
 
 class RemoteComputer:
     """Blocking, code-tool-friendly access to one remote desktop connection."""
+
+    PAUSE = 0.1
+
+    @staticmethod
+    def linear(value: float) -> float:
+        return value
+
+    def _input(self, operation: str, **args: Any) -> None:
+        self._call(perform(self._session, operation, **args))
+        time.sleep(seconds(self.PAUSE))
 
     def __init__(
         self,
@@ -37,8 +53,6 @@ class RemoteComputer:
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._serve_loop, name="remote-computer-io", daemon=True)
         self._closed = False
-        self._x = 0
-        self._y = 0
         self._thread.start()
         try:
             status = self._call(self._session.connect(self._config))
@@ -82,41 +96,73 @@ class RemoteComputer:
 
     def status(self) -> dict[str, Any]:
         async def read() -> dict[str, Any]:
-            return self._session.status()
+            return {**self._session.status(),
+                    "inputHeld": bool(self._session._held_keys or self._session._held_buttons)}
 
         return self._call(read())
 
     def size(self) -> tuple[int, int]:
-        return self.width, self.height
+        return Size(self.width, self.height)
 
-    def screenshot(self, region: tuple[int, int, int, int] | None = None) -> Image.Image:
+    def screenshot(
+        self, imageFilename: str | None = None, region: tuple[int, int, int, int] | None = None,
+    ) -> Image.Image:
         """Return a Pillow image in the same pixel coordinate space as input."""
         image = Image.open(io.BytesIO(self._call(self._session.screenshot()))).copy()
         if region is not None:
             x, y, width, height = region
             image = image.crop((x, y, x + width, y + height))
+        if imageFilename is not None:
+            image.save(imageFilename)
         return image
 
-    def move_to(self, x: int, y: int) -> None:
-        self._call(self._session.move(x, y))
-        self._x, self._y = x, y
+    def move_to(self, x: int | None = None, y: int | None = None, duration: float = 0,
+                tween: Callable[[float], float] = linear) -> None:
+        self._input("move", x=x, y=y, duration=seconds(duration), tween=tween)
 
     moveTo = move_to
+
+    def position(self, x: int | None = None, y: int | None = None) -> tuple[int, int]:
+        current = self._call(self._session.position())
+        return Position(current[0] if x is None else x, current[1] if y is None else y)
+
+    def move(self, xOffset: int | None = None, yOffset: int | None = None, duration: float = 0,
+             tween: Callable[[float], float] = linear) -> None:
+        self._input("move", x=xOffset, y=yOffset, relative=True, duration=seconds(duration), tween=tween)
+
+    moveRel = move
+
+    def onScreen(self, x: int, y: int) -> bool:
+        return 0 <= x < self.width and 0 <= y < self.height
 
     def click(
         self,
         x: int | None = None,
         y: int | None = None,
-        *,
-        button: str = "left",
         clicks: int = 1,
+        interval: float = 0.0,
+        button: str = "left",
     ) -> None:
-        x = self._x if x is None else x
-        y = self._y if y is None else y
-        self._call(self._session.click(x, y, button, clicks))
-        self._x, self._y = x, y
+        self._input("click", x=x, y=y, button=button, clicks=max(0, integer(clicks)), interval=seconds(interval))
 
-    def drag(
+    def doubleClick(self, x: int | None = None, y: int | None = None, interval: float = 0,
+                    button: str = "left") -> None:
+        self.click(x, y, 2, interval, button)
+
+    def tripleClick(self, x: int | None = None, y: int | None = None, interval: float = 0,
+                    button: str = "left") -> None:
+        self.click(x, y, 3, interval, button)
+
+    def rightClick(self, x: int | None = None, y: int | None = None) -> None:
+        self.click(x, y, button="right")
+
+    def mouseDown(self, x: int | None = None, y: int | None = None, button: str = "left") -> None:
+        self._input("mouse", x=x, y=y, button=button, pressed=True)
+
+    def mouseUp(self, x: int | None = None, y: int | None = None, button: str = "left") -> None:
+        self._input("mouse", x=x, y=y, button=button, pressed=False)
+
+    def drag_path(
         self,
         path: Sequence[tuple[int, int] | dict[str, int] | Point],
         *,
@@ -130,55 +176,83 @@ class RemoteComputer:
             for item in path
         ]
         self._call(self._session.drag(points, button, round(duration * 1000)))
-        self._x, self._y = points[-1].x, points[-1].y
 
     def drag_to(
         self,
-        x: int,
-        y: int,
-        *,
-        duration: float = 0.3,
+        x: int | None = None,
+        y: int | None = None,
+        duration: float = 0,
+        tween: Callable[[float], float] = linear,
         button: str = "left",
         steps: int = 12,
     ) -> None:
         if not 1 <= steps <= 99:
             raise ValueError("steps must be between 1 and 99")
-        start_x, start_y = self._x, self._y
-        path = [
-            Point(
-                x=round(start_x + (x - start_x) * index / steps),
-                y=round(start_y + (y - start_y) * index / steps),
-            )
-            for index in range(steps + 1)
-        ]
-        self._call(self._session.drag(path, button, round(duration * 1000)))
-        self._x, self._y = x, y
+        self._input("drag", x=x, y=y, duration=seconds(duration), tween=tween, button=button)
 
     dragTo = drag_to
 
-    def scroll(self, delta_y: int, *, x: int | None = None, y: int | None = None, delta_x: int = 0) -> None:
-        x = self._x if x is None else x
-        y = self._y if y is None else y
-        self._call(self._session.scroll(x, y, delta_x, delta_y))
-        self._x, self._y = x, y
+    def drag(self, xOffset: Any, yOffset: int | None = None, duration: float = 0,
+             tween: Callable[[float], float] = linear, button: str = "left") -> None:
+        if isinstance(xOffset, (list, tuple)) and yOffset is None:
+            self.drag_path(xOffset, duration=duration, button=button)
+        else:
+            self._input("drag", x=xOffset, y=yOffset, relative=True, duration=seconds(duration),
+                        tween=tween, button=button)
 
-    def write(self, text: str) -> None:
-        self._call(self._session.type_text(text))
+    dragRel = drag
+
+    def scroll(self, clicks: int, x: int | None = None, y: int | None = None) -> None:
+        self._input("scroll", x=x, y=y, clicks=integer(clicks))
+
+    vscroll = scroll
+
+    def hscroll(self, clicks: int, x: int | None = None, y: int | None = None) -> None:
+        self._input("scroll", x=x, y=y, clicks=integer(clicks), horizontal=True)
+
+    def write(self, text: str, interval: float = 0) -> None:
+        self._input("write", text=text, interval=seconds(interval))
 
     type_text = write
+    typewrite = write
 
-    def keypress(self, *keys: str | Sequence[str]) -> None:
+    def keypress(self, *keys: str | Sequence[str], interval: float = 0) -> None:
         selected: list[str]
         if len(keys) == 1 and not isinstance(keys[0], str):
             selected = list(keys[0])
         else:
             selected = [str(key) for key in keys]
-        self._call(self._session.keypress(selected))
+        self._input("hotkey", keys=selected, interval=seconds(interval))
 
     hotkey = keypress
 
-    def press(self, key: str) -> None:
-        self.keypress(key)
+    def press(self, keys: str | Sequence[str], presses: int = 1, interval: float = 0) -> None:
+        self._input("press", keys=[keys] if isinstance(keys, str) else list(keys),
+                    presses=max(0, integer(presses)), interval=seconds(interval))
+
+    def keyDown(self, key: str) -> None:
+        self._input("key", key=key.lower(), pressed=True)
+
+    def keyUp(self, key: str) -> None:
+        self._input("key", key=key.lower(), pressed=False)
+
+    @contextmanager
+    def hold(self, keys: str | Sequence[str]) -> Iterator[None]:
+        pressed: list[str] = []
+        try:
+            for key in [keys] if isinstance(keys, str) else keys:
+                pressed.append(key)
+                self.keyDown(key)
+            yield
+        finally:
+            errors = []
+            for key in reversed(pressed):
+                try:
+                    self.keyUp(key)
+                except Exception as error:  # noqa: BLE001 - release every held key
+                    errors.append(error)
+            if errors:
+                raise errors[0]
 
     def run_actions(self, actions: Sequence[dict[str, Any]]) -> Image.Image:
         """Run a validated action batch and return its final screenshot."""

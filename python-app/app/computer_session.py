@@ -30,6 +30,9 @@ class ComputerSession:
         self._backend: ComputerBackend | None = None
         self._config: BackendConfig | None = None
         self._lock = asyncio.Lock()
+        self._position = (0, 0)
+        self._held_keys: set[str] = set()
+        self._held_buttons: set[str] = set()
 
     @property
     def connected(self) -> bool:
@@ -74,7 +77,13 @@ class ComputerSession:
             backend, self._backend = self._backend, None
             self._config = None
             if backend is not None:
-                await backend.disconnect()
+                try:
+                    if self._held_keys or self._held_buttons:
+                        await backend.release_inputs()
+                        self._held_keys.clear()
+                        self._held_buttons.clear()
+                finally:
+                    await backend.disconnect()
 
     def _require_backend(self) -> ComputerBackend:
         if self._backend is None or not self._backend.connected:
@@ -89,8 +98,15 @@ class ComputerSession:
         async with self._lock:
             await self._move(x, y)
 
+    async def position(self) -> tuple[int, int]:
+        """Return the last pointer position successfully sent by this session."""
+        async with self._lock:
+            return self._position
+
+
     async def _move(self, x: int, y: int) -> None:
         await self._require_backend().move(x, y)
+        self._position = (x, y)
 
     async def click(self, x: int, y: int, button: str = "left", count: int = 1) -> None:
         async with self._lock:

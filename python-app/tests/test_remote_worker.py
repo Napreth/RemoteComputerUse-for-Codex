@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import io
+import random
+
 from PIL import Image
 
 from app.remote.worker import execute
@@ -39,3 +42,14 @@ def test_exec_namespace_persists_and_one_call_can_loop_over_remote_actions() -> 
     ]
     assert result["output"][0]["type"] == "input_image"
     assert result["output"][1] == {"type": "input_text", "text": "42"}
+
+
+def test_display_uses_upstream_png_byte_budget():
+    image = Image.frombytes("RGB", (1600, 1400), random.Random(0).randbytes(1600 * 1400 * 3))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    assert 6 * 1024 * 1024 < len(buffer.getvalue()) < 8 * 1024 * 1024
+    assert execute("display(image)", {"image": image})["output"][0]["type"] == "input_image"
+    result = execute("display(image); display(image)", {"image": image})
+    assert result["output"][0]["type"] == "input_image"
+    assert "Python image output exceeds its size limit" in result["output"][-1]["text"]

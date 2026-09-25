@@ -4,9 +4,8 @@ Remote Computer Use is a fork of OpenAI's Computer Use sample applications that
 is being rebuilt as an MIT-licensed Codex plugin for controlling isolated
 computers over remote-desktop protocols.
 
-This is a replacement product, not an additional backend for the original
-local Computer Use sample. Its Playwright and PyAutoGUI transports are removed,
-while its defining agent execution model is retained: the model writes Python,
+The Python sample's local desktop transports are replaced with RDP and VNC.
+Its defining agent execution model is retained: the model writes Python,
 that code runs in one persistent run-scoped process, and the process keeps
 variables and helpers alive across `exec_py` calls.
 
@@ -162,3 +161,13 @@ sample repository is preserved in
 The original sample README is retained at
 [`docs/upstream/openai-sample-README.md`](docs/upstream/openai-sample-README.md)
 for architectural reference.
+
+## Compatibility correction
+
+Common PyAutoGUI calls now route to the remote computer; see
+[the compatibility contract](docs/upstream-compatibility.md) for supported calls
+and explicit remote limitations. The image budget counts PNG bytes.
+
+The JavaScript/Playwright backend is retired and excluded from the workspace.
+Use `pnpm dev:python`; `pnpm check` covers Python, Console/contracts, shared
+lab unit tests and the Console production build.

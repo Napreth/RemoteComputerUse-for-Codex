@@ -92,21 +92,6 @@ importers:
         specifier: ^3.24.2
         version: 3.25.76
 
-  javascript-app:
-    dependencies:
-      '@cua-sample/contracts':
-        specifier: workspace:*
-        version: link:../contracts
-      fastify:
-        specifier: ^5.12.1
-        version: 5.12.1
-      openai:
-        specifier: ^6.25.0
-        version: 6.25.0(ws@8.21.3)(zod@3.25.76)
-      playwright:
-        specifier: ^1.55.0
-        version: 1.58.2
-
   labs:
     devDependencies:
       '@cua-sample/contracts':

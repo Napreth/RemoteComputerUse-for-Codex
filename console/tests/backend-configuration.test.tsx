@@ -28,7 +28,7 @@ describe("launch-selected backend", () => {
   it("shows Python and derives its controls and start settings from capabilities", async () => {
     vi.mocked(fetch).mockResolvedValue(response({ detail, runId: detail.run.id, status: "running", eventStreamUrl: detail.eventStreamUrl, replayUrl: detail.replayUrl }, 202));
     render(<OperatorConsole {...pythonBackendProps} initialRunnerIssue={null} runnerBaseUrl={runnerBaseUrl} scenarios={[scenario]} />);
-    expect(screen.getByText("Python / PyAutoGUI")).toBeTruthy();
+    expect(screen.getByText("Python / Remote Desktop")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: /backend/i })).toBeNull();
     fireEvent.click(screen.getByText("Advanced settings"));
     expect(screen.queryByRole("button", { name: "Headless" })).toBeNull();
@@ -104,6 +104,6 @@ describe("launch-selected backend", () => {
   it("shows the JavaScript subheader when JavaScript is selected", () => {
     render(<OperatorConsole {...javascriptBackendProps} initialRunnerIssue={null} runnerBaseUrl="http://127.0.0.1:4001" scenarios={[scenario]} />);
     expect(screen.getByText("JavaScript / Playwright")).toBeTruthy();
-    expect(screen.queryByText("Python / PyAutoGUI")).toBeNull();
+    expect(screen.queryByText("Python / Remote Desktop")).toBeNull();
   });
 });

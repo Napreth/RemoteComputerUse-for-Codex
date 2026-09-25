@@ -339,3 +339,44 @@ def test_vnc_connected_is_passive_and_never_reads_socket() -> None:
     assert backend.connected is True
     transport.descriptor = -1
     assert backend.connected is False
+
+
+@pytest.mark.asyncio
+async def test_raw_key_event_and_cleanup_cover_held_non_modifier_keys() -> None:
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+        send_mouse=AsyncMock(return_value=(True, None)),
+    )
+    backend = RDPBackend()
+    backend._connection = connection
+    backend._mouse_buttons = SimpleNamespace(
+        MOUSEBUTTON_LEFT=1, MOUSEBUTTON_RIGHT=2, MOUSEBUTTON_MIDDLE=3,
+    )
+    await backend.key_event("a", True)
+    pressed = connection.send_key_scancode.await_args.args
+    assert pressed[1] is True
+    await backend.release_inputs()
+    assert (pressed[0], False, pressed[2]) in [
+        call.args for call in connection.send_key_scancode.await_args_list
+    ]
+    with pytest.raises(ValueError, match="unsupported RDP key"):
+        await backend.key_event("unsupported-key", True)
+
+
+@pytest.mark.asyncio
+async def test_vnc_raw_key_event_and_cleanup_cover_printable_keys() -> None:
+    events = []
+    client = SimpleNamespace(
+        _sock=SimpleNamespace(fileno=lambda: 7),
+        _key=lambda key, *, down: events.append((key, down)),
+        _pointer=lambda *args: None,
+    )
+    backend = VNCBackend()
+    backend._client = client
+    await backend.key_event("A", True)
+    assert events == [(ord("A"), True)]
+    await backend.release_inputs()
+    assert (ord("A"), False) in events
+    with pytest.raises(ValueError, match="printable ASCII"):
+        await backend.key_event("你", True)

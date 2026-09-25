@@ -174,6 +174,14 @@ class VNCBackend(ComputerBackend):
 
         await self._run_io(client, write)
 
+    async def key_event(self, key: str, pressed: bool) -> None:
+        if len(key) == 1 and not 32 <= ord(key) <= 126:
+            raise ValueError("held VNC keys must be named keys or printable ASCII; use write for Unicode")
+        client = self._require_client()
+        symbol = keysym(key)
+        await self._run_io(client, lambda: client._key(symbol, down=pressed))
+
+
     async def key_chord(self, keys: list[str]) -> None:
         if not keys or len(keys) > 8:
             raise ValueError("keypress requires between 1 and 8 keys")
@@ -196,7 +204,9 @@ class VNCBackend(ComputerBackend):
         def release() -> None:
             self._buttons = 0
             client._pointer(0, 0, 0)
-            for name in ("ctrl", "shift", "alt", "win"):
-                client._key(keysym(name), down=False)
+            from .keys import KEYSYMS
+
+            for symbol in sorted(set(KEYSYMS.values()) | set(range(32, 127))):
+                client._key(symbol, down=False)
 
         await self._run_io(client, release)

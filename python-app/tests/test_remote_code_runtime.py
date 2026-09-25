@@ -59,3 +59,18 @@ async def test_successful_code_does_not_open_cleanup_connection(tmp_path: Path) 
     session = await runtime(release_helper_path=helper)
     assert (await session.execute("print('ok')"))["output"][0]["text"] == "ok\n"
     await session.close()
+
+
+@pytest.mark.parametrize("release_in_code", [False, True])
+async def test_successful_held_input_survives_status_and_is_released_on_close(tmp_path, release_in_code):
+    helper, marker = tmp_path / "release.py", tmp_path / "released"
+    helper.write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\nprint('{{\"released\":true}}')\n")
+    session = await runtime(release_helper_path=helper)
+    try:
+        await session.execute("input_held = True")
+        await session.status()
+        if release_in_code:
+            await session.execute("input_held = False")
+    finally:
+        await session.close()
+    assert marker.exists() is not release_in_code
