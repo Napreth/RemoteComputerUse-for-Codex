@@ -1088,7 +1088,6 @@ dependencies = [
     { name = "openai" },
     { name = "pillow" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
     { name = "uvicorn" },
     { name = "vnc-remote-control" },
 ]
@@ -1096,6 +1095,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1111,7 +1111,6 @@ requires-dist = [
     { name = "openai", specifier = ">=2,<3" },
     { name = "pillow", specifier = ">=12,<13" },
     { name = "pydantic", specifier = ">=2.10,<3" },
-    { name = "python-dotenv", specifier = ">=1,<2" },
     { name = "uvicorn", specifier = ">=0.34,<1" },
     { name = "vnc-remote-control", specifier = "==1.0.4" },
 ]
@@ -1119,6 +1118,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "httpx", specifier = ">=0.28,<1" },
+    { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8,<9" },
     { name = "pytest-asyncio", specifier = ">=1,<2" },

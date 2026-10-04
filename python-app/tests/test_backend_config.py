@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 from app.backends.config import RdpConfig, VncConfig, load_backend_config
@@ -38,3 +40,12 @@ def test_loads_separate_vnc_environment(monkeypatch: pytest.MonkeyPatch) -> None
 def test_rejects_unknown_backend() -> None:
     with pytest.raises(ValueError, match="rdp.*vnc"):
         load_backend_config("spice")
+
+
+def test_missing_target_settings_report_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in tuple(os.environ):
+        if name.startswith("REMOTE_COMPUTER_"):
+            monkeypatch.delenv(name)
+
+    with pytest.raises(ValueError, match=r"(?i)(rdp|vnc|backend).*(required|missing)"):
+        load_backend_config()

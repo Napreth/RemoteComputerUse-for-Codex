@@ -1,15 +1,20 @@
 ---
 name: remote-computer
-description: Operate an isolated graphical computer over the Remote Computer Use plugin's RDP or VNC backend. Use for remote or virtual-machine GUI tasks that must not take over the host desktop.
+description: Operate an isolated graphical computer through the bundled Remote Computer Use MCP server over RDP or VNC. Use for remote or virtual-machine GUI tasks that must not take over the host desktop.
 ---
 
 # Remote Computer
 
-Use the plugin's persistent `computer_exec_py` runtime. The configured RDP or
-VNC backend is an implementation detail; do not substitute host automation.
+Use the bundled `remote_computer` MCP server's persistent
+`computer_exec_py` runtime. The configured RDP or VNC backend is an
+implementation detail; do not substitute host automation. If the MCP tools are
+unavailable, report that its tools are unavailable and inspect startup
+diagnostics when accessible. Connection variables must be supplied by the Codex
+Host; see the README for the current Host configuration limitation. Do not
+invent a credentials store or environment defaults.
 
 1. Call `computer_list`. Connect a host with a stable `name` when it is absent.
-   A plugin-server instance may own several named hosts. Only the first
+   An MCP server instance may own several named hosts. Only the first
    connection may omit `name`; later connections must name their identity.
 2. Use `computer_exec_py` and begin with
    `display(computer.screenshot())`. Python globals survive between calls.
@@ -26,8 +31,8 @@ VNC backend is an implementation detail; do not substitute host automation.
 4. Treat screenshot pixels as the input coordinate system. The atomic
    `computer_*` tools remain available for simple one-off operations, but do
    not turn a multi-step task into one model turn per input event.
-5. Never place credentials in code or tool arguments when the server can read
-   them from its environment.
+5. Credentials come from the client-managed server environment. Never place
+   them in Python code or tool arguments.
 6. Treat `computer_exec_py` as full Python execution under the MCP server's OS
    account, not as a filesystem, process, or network sandbox.
 7. Disconnect when the task is complete or when the remote state is uncertain.

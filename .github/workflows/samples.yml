@@ -41,6 +41,8 @@ jobs:
       - name: Install locked remote Python runtime
         run: pnpm python:install
       - name: Check remote runtime, Console, contracts, labs and production build
+        env:
+          REMOTE_COMPUTER_FRESH_INSTALL_TEST: '1'
         run: pnpm check
       - name: Check managed Python launcher
         run: node --test scripts/launch.test.mjs

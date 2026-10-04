@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "remote_computer": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--frozen", "--no-dev", "--project", "${PLUGIN_ROOT}/python-app", "remote-computer-use"]
+    }
+  }
+}

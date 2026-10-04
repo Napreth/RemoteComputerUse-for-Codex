@@ -16,7 +16,6 @@ dependencies = [
   "openai>=2,<3",
   "pillow>=12,<13",
   "pydantic>=2.10,<3",
-  "python-dotenv>=1,<2",
   "uvicorn>=0.34,<1",
   "vnc-remote-control==1.0.4",
 ]
@@ -28,7 +27,7 @@ remote-computer-use = "app.mcp_server:main"
 packages = ["app"]
 
 [dependency-groups]
-dev = ["pytest>=8,<9", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "ruff>=0.16,<1", "mypy>=1.15", "pyyaml>=6,<7"]
+dev = ["pytest>=8,<9", "pytest-asyncio>=1,<2", "httpx>=0.28,<1", "jsonschema>=4.26,<5", "ruff>=0.16,<1", "mypy>=1.15", "pyyaml>=6,<7"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

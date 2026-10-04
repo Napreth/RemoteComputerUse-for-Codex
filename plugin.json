@@ -1,0 +1,28 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "remote-computer-use",
+  "version": "1.0.0",
+  "description": "Run named persistent Python computer-use sessions over RDP and VNC through the bundled Codex MCP server.",
+  "author": {
+    "name": "Napreth"
+  },
+  "license": "MIT",
+  "keywords": ["computer-use", "rdp", "vnc", "remote-desktop", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Remote Computer Use",
+        "shortDescription": "Remote GUI over RDP and VNC",
+        "longDescription": "Provide a bundled MCP server and skills for named persistent Python computer-use sessions over RDP or VNC without taking over the host pointer or keyboard.",
+        "developerName": "Napreth",
+        "category": "Developer Tools",
+        "capabilities": ["Interactive", "Write"],
+        "defaultPrompt": [
+          "Connect to my configured remote computer and show its screen.",
+          "Use the remote computer to complete this GUI task.",
+          "Check the remote computer session status."
+        ]
+      }
+    }
+  }
+}

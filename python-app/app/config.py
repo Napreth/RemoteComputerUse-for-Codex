@@ -3,17 +3,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 APP_ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = APP_ROOT.parent
 _defaults = json.loads((REPO_ROOT / "contracts" / "defaults.json").read_text(encoding="utf-8"))
 DEFAULT_MODEL: str = _defaults["model"]
 DEFAULT_MODEL_DISPLAY_NAME: str = _defaults["modelDisplayName"]
-
-
-def load_environment() -> None:
-    load_dotenv(REPO_ROOT / ".env", override=False)
 
 
 @dataclass(frozen=True)

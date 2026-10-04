@@ -7,13 +7,12 @@ import sys
 import uvicorn
 
 from .api import create_app
-from .config import Settings, load_environment
+from .config import Settings
 
 logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    load_environment()
     settings = Settings.from_environment()
     app = create_app(settings=settings)
 

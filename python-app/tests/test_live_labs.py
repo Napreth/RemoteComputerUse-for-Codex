@@ -1,11 +1,10 @@
-"""Opt-in model runs using the root .env. These tests operate the real desktop."""
+"""Opt-in model runs using the caller's environment and a remote desktop."""
 import asyncio
 import os
 from pathlib import Path
 
 import pytest
 
-from app.config import load_environment
 from app.lab_catalog import list_scenarios
 from app.lease import BackendLease
 from app.runner import RunnerManager
@@ -17,8 +16,7 @@ PROMPTS = {item["id"]: item["defaultPrompt"] for item in list_scenarios()}
 
 @pytest.mark.parametrize("scenario_id", list(PROMPTS))
 async def test_live_responses_lab(scenario_id, tmp_path):
-    load_environment()
-    assert os.environ.get("OPENAI_API_KEY"), "Set OPENAI_API_KEY in the shell or root .env for live desktop tests."
+    assert os.environ.get("OPENAI_API_KEY"), "Set OPENAI_API_KEY in the caller's environment for live remote tests."
     lease = BackendLease()
     lease.acquire()
     manager = RunnerManager(tmp_path / "data")

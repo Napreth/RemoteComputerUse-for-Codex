@@ -93,8 +93,6 @@ async function main() {
   if (backend !== "python" || options.some(option => option !== "--production")) {
     throw new Error("Use pnpm dev:python or pnpm start:python. The upstream JavaScript backend is retired.");
   }
-  const envPath = join(root, ".env");
-  if (existsSync(envPath)) process.loadEnvFile(envPath);
   const config = launchConfiguration(backend, options.includes("--production"));
   config.env.CUA_INSTANCE_ID = randomUUID();
   if (backend === "python" && !existsSync(config.command)) {
