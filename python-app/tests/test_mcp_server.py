@@ -6,13 +6,96 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from jsonschema import Draft202012Validator
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.server.mcpserver.exceptions import ToolError
+
+from app import mcp_server
+
+
+@pytest.mark.parametrize("field", ["port", "width", "height"])
+@pytest.mark.parametrize("value", [True, False, 0, 1.5, 4000.0])
+async def test_connect_rejects_invalid_numbers_before_launch(monkeypatch, field, value):
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_HOST", "env-rdp.example")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_USERNAME", "env-user")
+    monkeypatch.setenv(f"REMOTE_COMPUTER_RDP_{field.upper()}", "4000")
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    with pytest.raises(ToolError):
+        await mcp_server.mcp.call_tool("computer_connect", {field: value, "backend": "rdp"})
+    connect.assert_not_awaited()
+
+
+async def test_connect_preserves_valid_overrides_and_empty_domain_through_mcp(monkeypatch):
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_HOST", "env-rdp.example")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_USERNAME", "env-user")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_DOMAIN", "ENV-DOMAIN")
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    await mcp_server.mcp.call_tool("computer_connect", {
+        "backend": "rdp", "domain": "", "name": "work", "host": "explicit.example", "username": "explicit-user",
+        "port": 3392, "width": 1800, "height": 1200,
+    })
+    config, name = connect.await_args.args
+    assert (config.host, config.username, config.domain, config.port, config.width, config.height, name) == (
+        "explicit.example", "explicit-user", "", 3392, 1800, 1200, "work",
+    )
+
+
+@asynccontextmanager
+async def _startup_client(parameters: StdioServerParameters, budget: float = 30):
+    async with AsyncExitStack() as stack:
+        # The deadline includes spawning uv and dependency synchronization, not
+        # just the JSON-RPC initialize request. Tool calls retain a 300s timeout.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + budget
+        async with asyncio.timeout_at(deadline):
+            read, write = await stack.enter_async_context(stdio_client(parameters))
+            client = await stack.enter_async_context(ClientSession(read, write, read_timeout_seconds=300))
+            await client.initialize()
+        if loop.time() > deadline:
+            raise TimeoutError(f"Bundled MCP startup exceeded {budget:g} seconds")
+        yield client
+
+
+@pytest.mark.parametrize("stage", ["spawn", "initialize", "combined"])
+async def test_startup_budget_includes_spawn_and_initialize(monkeypatch: pytest.MonkeyPatch, stage: str) -> None:
+    @asynccontextmanager
+    async def delayed_stdio(parameters):
+        if stage == "spawn":
+            await asyncio.Event().wait()
+        if stage == "combined":
+            await asyncio.sleep(0.06)
+        yield object(), object()
+
+    class DelayedClient:
+        def __init__(self, read, write, *, read_timeout_seconds):
+            assert read_timeout_seconds == 300
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def initialize(self):
+            if stage == "initialize":
+                await asyncio.Event().wait()
+            await asyncio.sleep(0.06)
+
+    monkeypatch.setattr(sys.modules[__name__], "stdio_client", delayed_stdio)
+    monkeypatch.setattr(sys.modules[__name__], "ClientSession", DelayedClient)
+    async with asyncio.timeout(2):
+        with pytest.raises(TimeoutError):
+            async with _startup_client(StdioServerParameters(command="unused"), budget=0.1):
+                pytest.fail("Startup exceeded its shared spawn/initialize budget")
 
 
 def test_agent_plugin_manifest_uses_root_components() -> None:
@@ -71,6 +154,13 @@ def test_bundled_mcp_manifest_conforms_to_pinned_schema() -> None:
                 reason="Fresh dependency installation runs in CI with network access",
             ),
         ),
+        pytest.param(
+            "cold-cache",
+            marks=pytest.mark.skipif(
+                os.environ.get("REMOTE_COMPUTER_COLD_INSTALL_TEST") != "1",
+                reason="Cold-cache release compatibility check requires network access",
+            ),
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -84,7 +174,7 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
         ignore=shutil.ignore_patterns(
             ".git", ".diff", ".env", ".env.*", ".venv", "env", "node_modules", ".next", ".next-dev",
             ".tools", ".uv-cache", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__",
-            "test-artifacts", "data", "dist", "coverage", "*.tsbuildinfo",
+            "test-artifacts", "data", "dist", "coverage", "*.tsbuildinfo", "*.tar.gz",
         ),
     )
     assert not (root / "python-app" / ".venv").exists()
@@ -122,7 +212,10 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     process_env["PYTHONPATH"] = str(probe)
     host_uv_values: dict[str, str] = {}
     expected_environment_path = root / "python-app" / ".venv"
-    if installation == "fresh-host-uv":
+    if installation == "cold-cache":
+        host_uv_values = {"UV_CACHE_DIR": str(tmp_path / "empty uv cache"), "UV_PYTHON": sys.executable}
+        assert not Path(host_uv_values["UV_CACHE_DIR"]).exists()
+    elif installation == "fresh-host-uv":
         expected_environment_path = tmp_path / "host python environment"
         # A Host may select a shared cache. Reuse the installed controller's
         # cache here; the target virtual environment is still created from zero.
@@ -154,16 +247,13 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
         env=process_env,
     )
 
-    async with (
-        stdio_client(parameters) as (read_stream, write_stream),
-        ClientSession(read_stream, write_stream, read_timeout_seconds=120) as client,
-    ):
-        await client.initialize()
+    async with _startup_client(parameters) as client:
         tools = await client.list_tools()
         tools_by_name = {tool.name: tool for tool in tools.tools}
         assert set(tools_by_name) == {
             "computer_status",
             "computer_list",
+            "computer_list_profiles",
             "computer_connect",
             "computer_screenshot",
             "computer_exec_py",
@@ -186,8 +276,10 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
         assert item_schema["discriminator"]["propertyName"] == "type"
         assert len(item_schema["oneOf"]) == 7
         assert "name" in tools_by_name["computer_connect"].input_schema["properties"]
+        assert "profile" in tools_by_name["computer_connect"].input_schema["properties"]
         assert "password" not in tools_by_name["computer_connect"].input_schema["properties"]
-        for tool_name in tools_by_name.keys() - {"computer_connect", "computer_list"}:
+        assert "passwdenv" not in tools_by_name["computer_connect"].input_schema["properties"]
+        for tool_name in tools_by_name.keys() - {"computer_connect", "computer_list", "computer_list_profiles"}:
             assert "session" in tools_by_name[tool_name].input_schema["properties"]
 
         invalid_batch = await client.call_tool(

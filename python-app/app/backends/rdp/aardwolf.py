@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import quote
 
 from ...input_tracking import InputTracker
-from ..config import RdpConfig
+from ..config import MAX_PORT, MIN_PORT, RdpConfig, normalize_host
 from .keys import CONTROL_KEY_ALIASES, IGNORED_WINDOWS_KEYS, SCANCODES, key_scancode
 
 _RDP_TERMINATE_TIMEOUT = 5.0
@@ -36,6 +36,7 @@ class _Utf16CodeUnit:
 
 
 def _host_for_url(host: str) -> str:
+    host = normalize_host(host)
     try:
         address = ipaddress.ip_address(host)
     except ValueError:
@@ -44,11 +45,14 @@ def _host_for_url(host: str) -> str:
 
 
 def connection_url(config: RdpConfig) -> str:
+    if type(config.port) is not int or not MIN_PORT <= config.port <= MAX_PORT:
+        raise ValueError(f"RDP port must be an integer between {MIN_PORT} and {MAX_PORT}")
+    host = _host_for_url(config.host)
     username = f"{config.domain}\\{config.username}" if config.domain else config.username
     authority = quote(username, safe="\\")
     if config.password:
         authority += ":" + quote(config.password, safe="")
-    return f"rdp+ntlm-password://{authority}@{_host_for_url(config.host)}:{config.port}"
+    return f"rdp+ntlm-password://{authority}@{host}:{config.port}"
 
 
 def _unwrap(result: Any, operation: str) -> Any:

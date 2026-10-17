@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import threading
 from types import SimpleNamespace
 from typing import Any, ClassVar
@@ -68,6 +69,62 @@ def test_rdp_url_encodes_credentials_and_ipv6() -> None:
     assert connection_url(config) == (
         "rdp+ntlm-password://LAB\\codex%20user:p%40ss%3Aword@[2001:db8::1]:3389"
     )
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("127.0.0.1", "127.0.0.1"), ("rdp.example", "rdp.example"), ("WIN-DEV", "win-dev"),
+        ("RDP.Example.", "rdp.example."), ("bücher.example", "xn--bcher-kva.example"),
+        ("faß.de", "xn--fa-hia.de"), ("straße.de", "xn--strae-oqa.de"),
+        ("ς.gr", "xn--3xa.gr"), ("σ.gr", "xn--4xa.gr"),
+        ("rdp_service", "rdp_service"), ("vnc_server", "vnc_server"),
+        ("WIN_Host.Local.", "win_host.local."),
+        ("ab--host.local", "ab--host.local"), ("xn--fa-hia.de", "xn--fa-hia.de"),
+        ("::1", "::1"), ("[::1]", "::1"), ("2001:0db8::1", "2001:db8::1"),
+        ("::ffff:192.0.2.1", "::ffff:c000:201"),
+    ],
+)
+def test_rdp_real_factory_preserves_destination_and_credentials(host: str, expected: str) -> None:
+    from aardwolf.commons.factory import RDPConnectionFactory
+    from aardwolf.commons.iosettings import RDPIOSettings
+
+    config = RdpConfig(host=host, port=3390, username="alice user+@é", password="p@ss:/?#%\\é", domain="LAB")
+    factory = RDPConnectionFactory.from_url(connection_url(config), RDPIOSettings())
+    actual = factory.target.get_hostname_or_ip()
+    if ":" in expected:
+        assert ipaddress.ip_address(actual) == ipaddress.ip_address(expected)
+    else:
+        assert actual == expected
+    assert factory.target.port == 3390
+    assert not factory.target.proxies
+    assert factory.credential.username == config.username
+    assert factory.credential.domain == config.domain
+    assert factory.credential.secret == config.password
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "127.0.0.1@attacker.example", "127.0.0.1/?serverip=attacker.example", "host?proxyhost=evil",
+        "host#fragment", "host\\@evil", "rdp://host", "host:3389", "host%40evil", "host\n.evil",
+        "host\x00.evil", "host name", "-host.example", "host..example", "a" * 64 + ".example",
+        "999.999.999.999", "127.0.0.01", "127.1", "0x7f000001", "0x7f.0.0.1", "0177.0.0.1",
+        "2130706433", "[example.com]", "[127.0.0.1]", "[::1",
+        "fe80::1%40", "host＠evil", "host／evil", "host：3389",
+    ],
+)
+def test_rdp_url_rejects_host_syntax_before_credentials_are_used(host: str) -> None:
+    with pytest.raises(ValueError, match="host must") as caught:
+        connection_url(RdpConfig(host=host, port=3389, username="alice", password="secret-needle"))
+    assert "secret-needle" not in str(caught.value)
+    assert host not in str(caught.value)
+
+
+@pytest.mark.parametrize("port", [0, 65536, True, "3389@attacker.example", "3389?serverip=evil"])
+def test_rdp_url_rejects_invalid_direct_config_port(port) -> None:
+    with pytest.raises(ValueError, match="RDP port"):
+        connection_url(RdpConfig(host="127.0.0.1", port=port, username="alice", password="secret-needle"))
 
 
 @pytest.mark.asyncio

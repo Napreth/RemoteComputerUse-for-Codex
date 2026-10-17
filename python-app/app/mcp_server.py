@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 from typing import Annotated, Any
 
@@ -24,7 +25,9 @@ from .actions import (
     TypeAction,
 )
 from .backends import load_backend_config
+from .backends.config import Port, RdpHeight, RdpWidth
 from .plugin_session import PluginSessions
+from .profiles import list_profiles, load_profile
 
 mcp = MCPServer(
     "Remote Computer Use",
@@ -32,6 +35,8 @@ mcp = MCPServer(
     instructions=(
         "Operate isolated computers through named persistent Python runtimes. "
         "Prefer computer_exec_py so several actions, screenshots, checks, and loops can run in one call. "
+        "Use computer_list_profiles to discover local profile names, then computer_connect(profile=..., name=...). "
+        "An empty profile list allows computer_connect(name=...) with existing environment settings. "
         "A session argument is optional while exactly one computer is connected and required when there are several. "
         "RDP and VNC are independent backends selected at connection time; atomic tools use the selected session."
     ),
@@ -59,27 +64,36 @@ async def computer_list() -> dict[str, list[dict[str, Any]]]:
 
 
 @mcp.tool()
+async def computer_list_profiles() -> dict[str, list[dict[str, str]]]:
+    """List profile names/types without secrets; a missing config file returns an empty list."""
+    try:
+        return {"profiles": await asyncio.to_thread(list_profiles)}
+    except Exception as error:
+        raise _tool_error(error) from error
+
+
+@mcp.tool()
 async def computer_connect(
     name: str | None = None,
     backend: str | None = None,
     host: str | None = None,
-    port: int | None = None,
+    port: Port | None = None,
     username: str | None = None,
     domain: str | None = None,
-    width: int | None = None,
-    height: int | None = None,
+    width: RdpWidth | None = None,
+    height: RdpHeight | None = None,
+    profile: Annotated[str | None, Field(min_length=1, max_length=128)] = None,
 ) -> dict[str, Any]:
-    """Connect to RDP or VNC; only the first registered session may omit name."""
+    """Connect using a saved profile or explicit RDP/VNC settings; name identifies the runtime session."""
     try:
-        config = load_backend_config(
-            backend,
-            host=host,
-            port=port,
-            username=username,
-            domain=domain,
-            width=width,
-            height=height,
-        )
+        if profile is not None:
+            if any(value is not None for value in (backend, host, port, username, domain, width, height)):
+                raise ValueError("profile cannot be combined with connection overrides; only name may be supplied.")
+            config = await asyncio.to_thread(load_profile, profile)
+        else:
+            config = load_backend_config(
+                backend, host=host, port=port, username=username, domain=domain, width=width, height=height,
+            )
         return await sessions.connect(config, name)
     except Exception as error:
         raise _tool_error(error) from error

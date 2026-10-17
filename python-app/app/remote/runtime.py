@@ -414,6 +414,10 @@ async def launch_remote_python_runtime(
     python_path = python_path or sys.executable
     directory = Path(__file__).parent
     environment = child_environment()
+    secret_names = {name.upper() if sys.platform == "win32" else name for name in config.secret_env_names}
+    for name in tuple(environment):
+        if (name.upper() if sys.platform == "win32" else name) in secret_names:
+            environment.pop(name)
     environment.update(_config_environment(config))
     spawning = asyncio.create_task(
         OwnedProcess.spawn(

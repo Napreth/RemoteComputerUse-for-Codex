@@ -21,6 +21,6 @@ For development, install with `uv sync --project python-app --frozen`, then run 
 uv run --frozen --project python-app remote-computer-use
 ```
 
-The root [MCP manifest](../mcp.json) directly starts `uv run --frozen --no-dev --project ${PLUGIN_ROOT}/python-app remote-computer-use`. Codex expands `${PLUGIN_ROOT}` to the installed plugin root. The plugin does not set uv policy, modify `REMOTE_COMPUTER_*` or `UV_*`, or load `.env` files. Connection values must be supplied by the Codex Host; the root README records the current bundled MCP environment-configuration limitation.
+The root [MCP manifest](../mcp.json) directly starts `uv run --frozen --no-dev --project ${PLUGIN_ROOT}/python-app remote-computer-use`. Codex expands `${PLUGIN_ROOT}` to the installed plugin root. The plugin does not set uv policy, modify the MCP process's `REMOTE_COMPUTER_*` or `UV_*`, or load `.env` files. Connections can read user-owned profiles from LocalAppData or the XDG configuration directory; legacy environment-based connections remain supported. Profile credentials are resolved once per connection and retained privately for cleanup; referenced environment names are removed before worker startup. See the root README for configuration and the release compatibility gate.
 
 See the root [README](../README.md) for complete configuration and security notes.

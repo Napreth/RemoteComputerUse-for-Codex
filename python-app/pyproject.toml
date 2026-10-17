@@ -12,6 +12,7 @@ requires-python = ">=3.12,<3.14"
 dependencies = [
   "aardwolf==0.2.13",
   "fastapi>=0.115,<1",
+  "idna>=3,<4",
   "mcp==2.2.0",
   "openai>=2,<3",
   "pillow>=12,<13",

@@ -33,15 +33,37 @@ Install Codex, `uv`, and Python 3.12, with `uv` available on `PATH`. Open the [p
 
 The root [plugin manifest](plugin.json) discovers `skills/` and the bundled `remote_computer` server in [mcp.json](mcp.json). Codex starts `uv run --frozen --no-dev --project ${PLUGIN_ROOT}/python-app remote-computer-use`, expanding `${PLUGIN_ROOT}` to the installed plugin root and using that project's lockfile. Users do not need to locate the installation or supply a source path. The runtime does not launch a local browser or control the host desktop.
 
-The first start may need network access to install the locked Python dependencies. Agent Plugins 1.0.0 `mcp.json` has no startup or tool timeout fields; those limits are controlled by the Codex Host.
+The first start may need network access to install the locked Python dependencies. The [Codex main implementation](https://github.com/openai/codex/blob/main/codex-rs/codex-mcp/src/rmcp_client.rs) checked on 2026-10-15 gives MCP startup 30 seconds and tool calls 300 seconds. Agent Plugins 1.0.0 `mcp.json` has no timeout fields, and the documented plugin user policy provides no timeout override. **1.0 release is blocked:** the clean Windows cold-cache check exceeded 30 seconds before initialization. See [release compatibility](docs/release-compatibility.md). Cached dependency installation alone does not establish first-install compatibility.
 
 ## Configure
 
-The Codex Host must supply connection variables to the bundled MCP process. Choose `REMOTE_COMPUTER_BACKEND=rdp` or `vnc` and provide the matching target settings. RDP requires a host and username; provide its password when the target requires password authentication. VNC requires a host and a password when its server uses VNC-password authentication. The plugin starts uv directly and does not modify `REMOTE_COMPUTER_*` or `UV_*` values. Passwords are read from the runtime's environment, never from tool arguments; the runtime does not load `.env` files. Without required connection settings, MCP initialization and tool discovery still work, and `computer_connect` reports a configuration error.
+Create a user-owned `config.json` at `%LOCALAPPDATA%\remote-computer-use-for-codex\config.json` on Windows or `${XDG_CONFIG_HOME:-$HOME/.config}/remote-computer-use-for-codex/config.json` on Linux. An unset or relative `XDG_CONFIG_HOME` uses `$HOME/.config`. If Codex omits `LOCALAPPDATA`, the runtime queries the current user's Windows folder directly. The plugin does not create this file. Use integer schema version `1`, unique profile names, and one password source per profile:
+
+```json
+{
+  "version": 1,
+  "profiles": [
+    {"name": "vm-dev", "type": "rdp", "host": "192.0.2.10", "username": "alice", "password": "<your-password>"},
+    {"name": "vm-test", "type": "vnc", "host": "192.0.2.11", "port": 5900, "passwdenv": "VM_TEST_PASSWORD"}
+  ]
+}
+```
+
+Call `computer_list_profiles()` to obtain only profile names and backend types, then `computer_connect(profile="vm-dev", name="work")`. The profile selects saved settings; `name` selects the running session. Profile connections reject all explicit connection overrides, so saved credentials cannot be redirected to a different target through tool parameters. Each connection rereads and validates the file; edits affect new connections, while existing sessions and emergency cleanup retain their original resolved settings. Malformed JSON, duplicate names/properties, unknown fields, and conflicting `password`/`passwdenv` are rejected without echoing file contents. The file size limit is 1 MiB.
+
+RDP profiles require `host` and `username`; optional fields are `port` (3389), `domain` (empty), `width` (1440), `height` (900), and `insecure_tls` (false). VNC profiles require `host`; optional fields are `port` (5900) and `shared` (true only). Exclusive VNC sessions (`shared=false`) are unsupported and rejected during profile validation. `password` is a string and defaults to empty when neither credential field is provided. `passwdenv` names an existing MCP-process variable using letters, digits, and underscores, starting with a letter or underscore; an absent variable is an error. It does not request Host forwarding or load `.env`. Referenced credential variables are removed from worker environments before launch; the parent retains the resolved password for cleanup.
+
+Hosts may be DNS hostnames, ASCII internal names such as `rdp_service` or `win_host.local`, IPv4 literals, or IPv6 literals; IPv6 may be bracketed in the configuration. Internationalized DNS names use IDNA2008 with UTS #46 nontransitional processing, so `faß.de` becomes `xn--fa-hia.de`, not `fass.de`. Names are lowercased, and single-label machine names are supported. Underscores are allowed only in entirely ASCII internal names; each label must contain 1–63 letters, digits, underscores, or hyphens, with no hyphen at either end. Supply the port separately. URLs, userinfo, paths, query strings, fragments, percent escapes, IPv6 scope identifiers, and ambiguous nonstandard numeric IPv4 forms are rejected. The RDP URL builder also validates host and port for directly constructed configurations.
+
+If `config.json` is absent, `computer_list_profiles()` returns an empty list without creating it. Existing environment-based users can then call `computer_connect(name="work")` without `profile`. An explicit profile request still reports a missing file, and malformed or unreadable files remain discovery errors; they are not silently ignored.
+
+Plaintext passwords in this file are readable by `computer_exec_py`, which runs under the same OS account. Restrict file permissions to the intended user (for example, `0600` on Linux and user-only ACLs on Windows), keep it outside the repository and plugin ZIP, and do not treat those permissions as isolation from same-account Python. The plugin has no credential-writing tools, and passwords are never accepted as connection tool arguments.
 
 Optional `UV_*` values are interpreted by uv exactly as supplied by the Host. The plugin supplies neither uv defaults nor an environment-variable forwarding list, and contains no credential values.
 
-Host compatibility requirement: the target Codex version must be able to inject the required values into bundled MCP processes. The [current official plugin documentation](https://developers.openai.com/plugins/build/plugins) describes user policies for enablement, approvals, and tool access, but does not document a user-level bundled MCP transport `env` or `env_vars` override. If a Host cannot supply those values, credential configuration remains an upstream blocker. No minimum Codex version with that capability has been verified.
+Explicit connection arguments inherit matching environment settings only when omitted or `None`. Empty `host` or `backend` values and an empty RDP `username` are rejected; `domain=""` explicitly clears an environment-provided RDP domain. Ports and dimensions must be integers within their supported ranges; zero, booleans, and floats are rejected rather than replaced with environment values or defaults.
+
+Legacy explicit `computer_connect(backend=..., host=...)` calls remain supported and read matching `REMOTE_COMPUTER_*` settings from the MCP environment. The [bundled MCP user-environment gap](https://github.com/openai/codex/issues/36854) remains upstream: use a plaintext profile password when the Host cannot inject a referenced variable. Profiles provide a connection-configuration path without that Host feature; they do not configure uv or add an environment forwarding list. With no target configuration, MCP initialization and tool discovery still work, while `computer_connect` reports a configuration error. The following environment examples apply only when the Host already supplies those values:
 
 RDP:
 
@@ -68,16 +90,17 @@ Each lab server generates a fresh 128-bit capability path. Its HTML and static a
 
 ## Quick start
 
-After uploading the plugin ZIP and configuring the target through a Host that supplies its environment, start a new Codex session, check that the bundled `remote_computer` tools are available, connect to a target, inspect its framebuffer, run Python against the same remote computer, then disconnect:
+After uploading the plugin ZIP and creating the user profiles file, start a new Codex session, check that the bundled `remote_computer` tools are available, connect to a target, inspect its framebuffer, run Python against the same remote computer, then disconnect:
 
 ```text
-computer_connect(name="win-dev", backend="rdp", host="192.0.2.10", username="codex")
+computer_list_profiles()
+computer_connect(profile="vm-dev", name="win-dev")
 computer_screenshot(session="win-dev")
 computer_exec_py(session="win-dev", code="display(computer.screenshot())")
 computer_disconnect(session="win-dev")
 ```
 
-The RDP or VNC password comes from the client-managed environment, not the tool call. Inside `computer_exec_py`, use `computer` for remote input and screenshots; `pyautogui` and `import pyautogui` resolve to the same remote compatibility facade. Ordinary Python globals remain available in later calls to the same session. For a single connected computer, later tool calls may omit `session`; name it explicitly when using multiple computers. See the [Chinese guide](README_zh.md) for a complete walkthrough.
+The RDP or VNC password comes from the selected profile or existing environment. Inside `computer_exec_py`, use `computer` for remote input and screenshots; `pyautogui` and `import pyautogui` resolve to the same remote compatibility facade. Ordinary Python globals remain available in later calls to the same session. For a single connected computer, later tool calls may omit `session`; name it explicitly when using multiple computers. See the [Chinese guide](README_zh.md) for a complete walkthrough.
 
 ## Tools
 
@@ -123,7 +146,7 @@ VNC supports horizontal and vertical wheel events. RDP supports vertical wheel e
 ## Security model
 
 - **`computer_exec_py` is trusted host code execution, not a sandbox.** The persistent child process executes model-generated Python with complete builtins under the same OS account as the MCP server. It can read and write files available to that account, import modules, start processes, and use the network. Remote-desktop isolation prevents takeover of the host pointer and keyboard; it does not isolate Python from the host OS. Run the plugin under a dedicated least-privileged account, container, or VM when the generated code or prompt content is not fully trusted.
-- Credentials are supplied at runtime and must not be committed.
+- Credentials are supplied by user profiles or the existing server environment and must not be committed. Plaintext profile passwords are accessible to same-account Python; this is not a secret store or sandbox boundary.
 - Remote backend password variables are removed from the persistent worker's environment after its connection starts, but that hygiene is not an OS security boundary.
 - Remote screenshots and input travel through the selected remote protocol; the host computer's pointer and keyboard are not controlled.
 - Mutating tools remain approval-gated by Codex.
