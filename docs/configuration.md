@@ -29,6 +29,10 @@ Without `profile`, `computer_connect()` can use values already present in the MC
 
 Set `REMOTE_COMPUTER_BACKEND` to `rdp` (the default) or `vnc`. Explicit arguments inherit environment values only when omitted or `None`; empty targets and usernames are rejected, while `domain=""` clears an inherited RDP domain. Ports and dimensions must be integers in their supported ranges; zero, booleans and floats are rejected. MCP can initialize and list tools without connection settings; an actual connect then reports the missing configuration.
 
+## Startup troubleshooting
+
+The ZIP includes `python-app/.python-version` to request Python 3.12 through uv's normal project discovery; Host-provided `UV_PYTHON` remains an explicit override. If uv fails while querying `.venv/Scripts/python.exe` before MCP initialization, inspect its stderr. A missing `pyvenv.cfg` indicates an incomplete virtual environment, and adding the version file alone cannot repair that existing environment. Stop the plugin, rename only the generated `.venv` shown in the error to a backup name, then restart with the corrected package so uv can rebuild it. When using `UV_PROJECT_ENVIRONMENT`, repair that user-selected environment instead. Keep connection configuration and project sources intact.
+
 ## Retained Labs workflow
 
 Labs run from the source checkout's runner and Console; they are not bundled in the upload ZIP. Windows navigation requires Win+R and Edge. Set `REMOTE_COMPUTER_GUEST_OS=windows`; for VNC, verify that the server forwards Win+R and explicitly set `REMOTE_COMPUTER_VNC_WINDOWS_NAVIGATION=win-r`. Other shortcut mappings are unsupported; navigation uses no fixed taskbar coordinates.

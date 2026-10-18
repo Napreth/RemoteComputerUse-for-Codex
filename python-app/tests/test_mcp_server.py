@@ -191,7 +191,7 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
         "        return {k: v for k, v in os.environ.items() if k.startswith(('UV_', 'REMOTE_COMPUTER_'))}\n"
         "    before = tracked_environment()\n"
         "    def report_environment():\n"
-        f"        Path({str(report)!r}).write_text(json.dumps({{'before': before, 'after': tracked_environment()}}), encoding='utf-8')\n"
+        f"        Path({str(report)!r}).write_text(json.dumps({{'before': before, 'after': tracked_environment(), 'python_version': list(sys.version_info[:2])}}), encoding='utf-8')\n"
         "    atexit.register(report_environment)\n",
         encoding="utf-8",
     )
@@ -204,10 +204,8 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     }
     # Simulate Host path expansion and environment injection, without uv defaults
     # or connection settings supplied by the plugin.
-    # Supply the documented installed-Python prerequisite, not a venv launcher
-    # that uv skips when it selects an interpreter for a fresh environment.
-    interpreter = Path(getattr(sys, "_base_executable", sys.executable))
-    process_env["PATH"] = str(interpreter.parent) + os.pathsep + process_env.get("PATH", "")
+    # Keep the real Host PATH: prepending pytest's interpreter would mask a ZIP
+    # missing its Python version file when another Python appears first.
     process_env["PLUGIN_ROOT"] = str(root)
     process_env["PYTHONPATH"] = str(probe)
     host_uv_values: dict[str, str] = {}
@@ -316,6 +314,7 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     for name, value in host_uv_values.items():
         assert observations["after"][name] == value
     if installation == "fresh-defaults":
+        assert observations["python_version"] == [3, 12]
         assert not any(name.startswith("UV_") for name in process_env)
         for name in ("UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "UV_PYTHON", "UV_PYTHON_INSTALL_DIR"):
             assert name not in observations["after"]

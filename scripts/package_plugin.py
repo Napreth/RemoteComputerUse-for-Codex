@@ -25,6 +25,7 @@ FILES = (
     "docs/release-compatibility.md",
     "docs/upstream/openai-sample-README.md",
     "skills/remote-computer/SKILL.md",
+    "python-app/.python-version",
     "python-app/pyproject.toml",
     "python-app/uv.lock",
     "python-app/app/__init__.py",

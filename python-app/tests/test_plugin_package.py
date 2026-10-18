@@ -64,6 +64,7 @@ def test_upload_archive_is_complete_and_excludes_local_state(source: Path, tmp_p
             "LICENSES/OpenAI-CUA-Sample-App-LICENSE",
             "docs/configuration.md",
             "docs/upstream/openai-sample-README.md",
+            "python-app/.python-version",
             "python-app/pyproject.toml",
             "python-app/uv.lock",
             "python-app/app/mcp_server.py",
@@ -76,6 +77,7 @@ def test_upload_archive_is_complete_and_excludes_local_state(source: Path, tmp_p
         assert not set(names).intersection(excluded)
         assert not any(name.startswith(("/", "../", "scripts/", "python-app/tests/")) for name in names)
         assert all(b"LOCAL-SECRET-MARKER" not in archive.read(name) for name in names)
+        assert archive.read("python-app/.python-version").strip() == b"3.12"
         for component in ("plugin", "mcp"):
             schema = json.loads(
                 (REPOSITORY / f"python-app/tests/fixtures/agent_plugins_1_0_0_{component}.schema.json").read_text()
@@ -116,7 +118,9 @@ def test_cli_needs_only_standard_library_and_resolves_its_own_root(source: Path,
     assert not (source / ".git").exists() and not (source / "python-app/.venv").exists()
 
 
-@pytest.mark.parametrize("missing", ["mcp.json", "python-app/uv.lock", "python-app/app/remote/worker.py"])
+@pytest.mark.parametrize(
+    "missing", ["mcp.json", "python-app/.python-version", "python-app/uv.lock", "python-app/app/remote/worker.py"],
+)
 def test_missing_runtime_files_fail_before_writing_archive(source: Path, tmp_path: Path, missing: str) -> None:
     (source / missing).unlink()
     output = tmp_path / "plugin.zip"
