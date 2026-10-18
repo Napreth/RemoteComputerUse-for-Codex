@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 import subprocess
 import sys
+import zipfile
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -168,15 +168,12 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     source = Path(__file__).parents[2]
     root = tmp_path / f"random plugin install {uuid4().hex}"
     fresh_package = installation != "existing-environment"
-    shutil.copytree(
-        source,
-        root,
-        ignore=shutil.ignore_patterns(
-            ".git", ".diff", ".env", ".env.*", ".venv", "env", "node_modules", ".next", ".next-dev",
-            ".tools", ".uv-cache", ".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__",
-            "test-artifacts", "data", "dist", "coverage", "*.tsbuildinfo", "*.tar.gz",
-        ),
+    package = tmp_path / "plugin.zip"
+    await asyncio.to_thread(
+        subprocess.check_call, [sys.executable, "-I", "-S", str(source / "scripts/package_plugin.py"), "--output", str(package)],
     )
+    with zipfile.ZipFile(package) as archive:
+        archive.extractall(root)
     assert not (root / "python-app" / ".venv").exists()
     manifest = json.loads((root / "mcp.json").read_text(encoding="utf-8"))
     definition = manifest["mcpServers"]["remote_computer"]
@@ -207,7 +204,10 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     }
     # Simulate Host path expansion and environment injection, without uv defaults
     # or connection settings supplied by the plugin.
-    process_env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + process_env.get("PATH", "")
+    # Supply the documented installed-Python prerequisite, not a venv launcher
+    # that uv skips when it selects an interpreter for a fresh environment.
+    interpreter = Path(getattr(sys, "_base_executable", sys.executable))
+    process_env["PATH"] = str(interpreter.parent) + os.pathsep + process_env.get("PATH", "")
     process_env["PLUGIN_ROOT"] = str(root)
     process_env["PYTHONPATH"] = str(probe)
     host_uv_values: dict[str, str] = {}

@@ -159,6 +159,8 @@ VNC supports horizontal and vertical wheel events. RDP supports vertical wheel e
 
 ## Development
 
+To build an upload ZIP, run `python scripts/package_plugin.py` (Python 3.12+, standard library only), or `pnpm plugin:pack`. The default output is `dist/remote-computer-use-1.0.0.zip`, named from `plugin.json`; use `--output <path>.zip` to choose a destination. The script locates the checkout from its own path, so it also works from another current directory and from a downloaded source ZIP without Git. It stages only manifests, the MCP runtime, its locked Python project, the skill, license and user documentation, excluding local configuration, virtual environments, caches, tests, Console and Labs. Entry order, timestamps and permissions are fixed for repeatable archives; source links are rejected. Upload the generated ZIP through **Customize → Plugins → Add → Upload plugin ZIP**. Packaging does not validate the deferred release compatibility requirements.
+
 Development happens directly on `main`. Repository commits are intentionally left unsigned during implementation so the maintainer can sign the finished history later.
 
 Run the plugin checks with:

@@ -105,6 +105,8 @@ display(computer.screenshot())
 
 ## 开发
 
+运行 `python scripts/package_plugin.py`（Python 3.12+，仅使用标准库）或 `pnpm plugin:pack` 生成上传用 ZIP，默认输出为 `dist/remote-computer-use-1.0.0.zip`，名称和版本取自 `plugin.json`；可用 `--output <路径>.zip` 指定目标。脚本通过自身路径定位源码，因此也可从其他工作目录运行，且下载的源码 ZIP 解压后无需 Git 即可打包。脚本先在临时目录整理插件清单、MCP 运行时及锁定的 Python 项目、Skill、许可证和用户文档，不包含本地配置、虚拟环境、缓存、测试、Console 或 Labs。归档条目顺序、时间戳和权限固定，便于重复构建；源文件中的链接会被拒绝。生成后从 **Customize → Plugins → 添加 → 上传插件压缩包** 导入。打包不代表已通过暂缓处理的发布兼容性检查。
+
 在仓库根目录运行 `pnpm check`，执行 Python、Console、契约和 Labs 检查及 Console 生产构建。`pnpm dev:python` 启动 Python runner 和 Console，`pnpm start:python` 使用构建后的 Console；两者都继承启动它们的进程环境，不读取仓库 `.env`。旧 JavaScript/Playwright 后端仅作为历史参考，不属于当前构建目标。完整 Python 框架测试可运行 `uv run --frozen --project python-app pytest -s -p no:cacheprovider python-app/tests`。
 
 ## 许可证
