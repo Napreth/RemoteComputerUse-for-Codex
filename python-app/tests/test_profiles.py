@@ -189,22 +189,34 @@ async def test_invalid_profile_host_never_launches_runtime(config_file, monkeypa
     connect.assert_not_awaited()
 
 
-def test_platform_paths_and_windows_native_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_windows_profile_path_and_native_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(profiles.sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
-    expected = tmp_path / profiles.CONFIG_DIRECTORY / "config.json"
+    expected = tmp_path / "remote-computer-use" / "config.json"
     assert profiles.profiles_path() == expected
     monkeypatch.delenv("LOCALAPPDATA")
     monkeypatch.setattr(profiles, "_windows_local_app_data", lambda: tmp_path)
     assert profiles.profiles_path() == expected
+
+
+def test_linux_profile_path_uses_explicit_xdg_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(profiles.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert profiles.profiles_path() == expected
-    monkeypatch.setenv("XDG_CONFIG_HOME", "relative-path")
+    assert profiles.profiles_path() == tmp_path / "remote-computer-use" / "config.json"
+
+
+@pytest.mark.parametrize("xdg_root", [None, "", "relative-path"])
+def test_linux_without_absolute_xdg_root_uses_private_home_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, xdg_root: str | None,
+) -> None:
+    monkeypatch.setattr(profiles.sys, "platform", "linux")
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    assert profiles.profiles_path() == tmp_path / ".config" / profiles.CONFIG_DIRECTORY / "config.json"
-    monkeypatch.delenv("XDG_CONFIG_HOME")
-    assert profiles.profiles_path() == tmp_path / ".config" / profiles.CONFIG_DIRECTORY / "config.json"
+    if xdg_root is None:
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    else:
+        monkeypatch.setenv("XDG_CONFIG_HOME", xdg_root)
+    assert profiles.profiles_path() == tmp_path / ".remote-computer-use" / "config.json"
+    assert not list(tmp_path.iterdir())
 
 
 async def test_mcp_profile_selection_is_separate_from_session_name(config_file: Path, monkeypatch: pytest.MonkeyPatch):

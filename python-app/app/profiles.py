@@ -25,7 +25,7 @@ from .backends.config import (
     normalize_host,
 )
 
-CONFIG_DIRECTORY = "remote-computer-use-for-codex"
+CONFIG_DIRECTORY = "remote-computer-use"
 MAX_CONFIG_BYTES = 1024 * 1024
 
 
@@ -55,7 +55,9 @@ def profiles_path() -> Path:
             raise ProfilesError("LOCALAPPDATA must be an absolute directory.")
     else:
         value = os.environ.get("XDG_CONFIG_HOME")
-        root = Path(value) if value and Path(value).is_absolute() else Path.home() / ".config"
+        if not value or not Path(value).is_absolute():
+            return Path.home() / f".{CONFIG_DIRECTORY}" / "config.json"
+        root = Path(value)
     return root / CONFIG_DIRECTORY / "config.json"
 
 
