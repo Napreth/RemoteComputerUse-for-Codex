@@ -14,7 +14,7 @@ import time
 import traceback
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, TextIO
 
 from PIL import Image
 
@@ -23,17 +23,42 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.input_tracking import set_observer
+from app.processes import MAX_PROCESS_OUTPUT_BYTES
 from app.remote.computer import RemoteComputer
 
 _emit_lock = threading.Lock()
+_protocol_output: TextIO | None = None
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+
+class WorkerOutputTooLarge(ValueError):
+    """A response cannot fit in the parent's bounded protocol reader."""
+
+
+def isolate_protocol_output() -> None:
+    """Reserve a private descriptor; ordinary stdout goes to diagnostics forever."""
+    global _protocol_output
+    if _protocol_output is not None:
+        return
+    protocol = os.fdopen(os.dup(1), "w", encoding="utf-8", newline="\n")
+    try:
+        os.dup2(2, 1)
+    except BaseException:
+        protocol.close()
+        raise
+    _protocol_output = protocol
 
 
 def emit(payload: dict[str, Any]) -> None:
-    if sys.__stdout__ is None:
-        raise RuntimeError("Worker stdout is unavailable.")
+    encoded = json.dumps(payload) + "\n"
+    # json.dumps defaults to ASCII escapes, so characters equal wire bytes.
+    if len(encoded) > MAX_PROCESS_OUTPUT_BYTES:
+        raise WorkerOutputTooLarge("Python output exceeds 12 MiB.")
+    if _protocol_output is None:
+        raise RuntimeError("Worker protocol output is unavailable.")
     with _emit_lock:
-        sys.__stdout__.write(json.dumps(payload) + "\n")
-        sys.__stdout__.flush()
+        _protocol_output.write(encoded)
+        _protocol_output.flush()
 
 
 def image_output(value: Image.Image | bytes) -> dict[str, str]:
@@ -43,6 +68,8 @@ def image_output(value: Image.Image | bytes) -> dict[str, str]:
         value = buffer.getvalue()
     if not isinstance(value, bytes) or not value.startswith(b"\x89PNG\r\n\x1a\n"):
         raise TypeError("display expects a Pillow image or PNG bytes.")
+    if len(value) > MAX_IMAGE_BYTES:
+        raise ValueError("PNG image output exceeds its 8 MiB size limit.")
     return {
         "type": "input_image",
         "detail": "original",
@@ -70,7 +97,7 @@ def execute(code: str, namespace: dict[str, Any]) -> dict[str, Any]:
         # transport envelope. Padding does not represent image bytes.
         encoded = item["image_url"].removeprefix("data:image/png;base64,")
         image_bytes += len(encoded) // 4 * 3 - (len(encoded) - len(encoded.rstrip("=")))
-        if image_bytes > 8 * 1024 * 1024 or len(output) >= 250:
+        if image_bytes > MAX_IMAGE_BYTES or len(output) >= 250:
             raise ValueError("Python image output exceeds its size limit.")
         output.append(item)
 
@@ -167,8 +194,13 @@ def serve_requests(namespace: dict[str, Any], stream: Any) -> None:
         background_input_possible = background_input_possible or any(
             thread not in owned_threads for thread in threading.enumerate()
         )
-        emit({"id": request.get("id"), **result, "connected": connected,
-              "inputHeld": input_held or background_input_possible})
+        health = {"connected": connected, "inputHeld": input_held or background_input_possible}
+        try:
+            emit({"id": request.get("id"), **result, **health})
+        except WorkerOutputTooLarge as error:
+            emit({"id": request.get("id"), "error": {
+                "code": "python_output_too_large", "message": str(error), "recoverable": True,
+            }, **health})
 
 
 class RemotePyAutoGUI(ModuleType):
@@ -189,6 +221,7 @@ class RemotePyAutoGUI(ModuleType):
 
 
 def main() -> None:
+    isolate_protocol_output()
     set_observer(lambda protocol, identities: emit({
         "kind": "input_identity", "protocol": protocol, "identities": identities,
     }))

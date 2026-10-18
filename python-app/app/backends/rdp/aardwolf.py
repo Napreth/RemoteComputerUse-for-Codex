@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import ipaddress
 import logging
 from typing import Any
 from urllib.parse import quote
 
 from ...input_tracking import InputTracker
-from ..config import MAX_PORT, MIN_PORT, RdpConfig, normalize_host
+from ..config import MAX_PORT, MIN_PORT, RdpConfig, host_for_uri
 from .keys import CONTROL_KEY_ALIASES, IGNORED_WINDOWS_KEYS, SCANCODES, key_scancode
 
 _RDP_TERMINATE_TIMEOUT = 5.0
@@ -35,19 +34,10 @@ class _Utf16CodeUnit:
         return self.value.to_bytes(2, "little")
 
 
-def _host_for_url(host: str) -> str:
-    host = normalize_host(host)
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
-        return host
-    return f"[{address}]" if address.version == 6 else host
-
-
 def connection_url(config: RdpConfig) -> str:
     if type(config.port) is not int or not MIN_PORT <= config.port <= MAX_PORT:
         raise ValueError(f"RDP port must be an integer between {MIN_PORT} and {MAX_PORT}")
-    host = _host_for_url(config.host)
+    host = host_for_uri(config.host)
     username = f"{config.domain}\\{config.username}" if config.domain else config.username
     authority = quote(username, safe="\\")
     if config.password:

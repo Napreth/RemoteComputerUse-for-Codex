@@ -57,10 +57,12 @@ async def perform(session: ComputerSession, operation: str, **args: Any) -> None
         def trajectory() -> list[tuple[int, int]]:
             backend.validate_point(x, y)
             duration = args.get("duration", 0.0)
-            if duration <= 0.1:
+            steps = args.get("steps")
+            if steps is None and duration <= 0.1:
                 return [(x, y)]
             tween: Callable[[float], float] = args.get("tween", lambda value: value)
-            steps = max(1, min(1000, math.ceil(duration / 0.02))) if duration > 0.1 else 1
+            if steps is None:
+                steps = max(1, min(1000, math.ceil(duration / 0.02)))
             # Validate interpolation before a drag presses a button.
             points = []
             for index in range(1, steps + 1):
@@ -75,7 +77,7 @@ async def perform(session: ComputerSession, operation: str, **args: Any) -> None
 
         async def move(points: list[tuple[int, int]]) -> None:
             for point in points:
-                if len(points) > 1:
+                if args.get("duration", 0) and (len(points) > 1 or args.get("steps") is not None):
                     await asyncio.sleep(args.get("duration", 0) / len(points))
                 await session._move(*point)
 

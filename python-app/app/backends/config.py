@@ -69,6 +69,12 @@ def normalize_host(host: str) -> str:
     return ascii_host
 
 
+def host_for_uri(host: str) -> str:
+    """Normalize an address and bracket IPv6 literals inside a URI authority."""
+    host = normalize_host(host)
+    return f"[{host}]" if ":" in host else host
+
+
 def _setting[T: str | int](explicit: T | None, name: str, default: T) -> T | str:
     """Explicit values win; missing/empty environment settings use the default."""
     return explicit if explicit is not None else (os.getenv(name) or default)

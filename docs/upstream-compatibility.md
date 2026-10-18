@@ -22,6 +22,9 @@ Movement supports duration and a callable tween. `PAUSE` defaults to 0.1 seconds
 `mouseDown` and `mouseUp` accept `duration`/`tween` but move immediately, as in
 PyAutoGUI 0.9.54.
 Path-based dragging remains available as `drag_path` and `drag(path, ...)`.
+The remote extension `drag_to(..., steps=N)` (also `dragTo`) uses exactly
+1–99 interpolation segments and distributes the duration over those segments,
+including for short durations. Omitting `steps` retains duration-based sampling.
 
 Python `scroll`/`vscroll` use wheel clicks, positive up and negative down;
 `hscroll` uses positive right. Requests over 20 clicks are split, not truncated.
@@ -45,7 +48,16 @@ the helper still releases all known inputs and sweeps standard keys/buttons,
 but cleanup remains unconfirmed. No input identity journal is written to disk.
 
 The PNG display budget is the upstream aggregate 8 MiB of PNG bytes, before
-Base64 encoding.
+Base64 encoding. Atomic screenshots and final action screenshots have the same
+8 MiB per-image limit. Exceeding it returns a recoverable error while preserving
+the connection and Python state; use a cropped screenshot through Python when
+the full framebuffer is too large. The worker checks every serialized response
+against the 12 MiB protocol limit before writing any bytes.
+
+Protocol replies and input identities use a dedicated file descriptor. Ordinary
+stdout, including late background-thread prints, raw writes to descriptor 1 and
+inherited child-process output, goes to diagnostics outside execution capture.
+Ordinary output is isolated from protocol frames.
 
 ## Explicit remote limits
 

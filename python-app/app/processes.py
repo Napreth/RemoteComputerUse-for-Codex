@@ -7,19 +7,19 @@ import contextlib
 import os
 import signal as signals
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TypeVar, cast
+from typing import cast
 
-T = TypeVar("T")
+MAX_PROCESS_OUTPUT_BYTES = 12 * 1024 * 1024
 
 
-async def bounded(operation: Awaitable[T], seconds: float) -> T:
+async def bounded[T](operation: Awaitable[T], seconds: float) -> T:
     """Apply a deadline even when the operation delays or suppresses cancellation."""
     task = asyncio.ensure_future(operation)
     try:
         done, _ = await asyncio.wait((task,), timeout=seconds)
         if done:
             return await task
-        raise asyncio.TimeoutError()
+        raise TimeoutError()
     finally:
         if not task.done():
             task.cancel()
@@ -40,7 +40,7 @@ def assert_active(signal: asyncio.Event | None) -> None:
         raise asyncio.CancelledError("Run aborted.")
 
 
-async def await_active(operation: Awaitable[T], signal: asyncio.Event | None = None) -> T:
+async def await_active[T](operation: Awaitable[T], signal: asyncio.Event | None = None) -> T:
     """Race the actual operation against Stop, and reject results arriving after Stop."""
     task = asyncio.ensure_future(operation)
     cancelled = asyncio.create_task(signal.wait()) if signal is not None else None
@@ -68,7 +68,7 @@ async def await_active(operation: Awaitable[T], signal: asyncio.Event | None = N
 
 class _ProcessProtocol(asyncio.SubprocessProtocol):
     def __init__(self) -> None:
-        self.stdout = asyncio.StreamReader(limit=12 * 1024 * 1024 + 1)
+        self.stdout = asyncio.StreamReader(limit=MAX_PROCESS_OUTPUT_BYTES + 1)
         self.stderr = asyncio.StreamReader(limit=64 * 1024)
         self.exited = asyncio.Event()
         self.writable = asyncio.Event()
@@ -190,7 +190,7 @@ class OwnedProcess:
             elif self.process.returncode is None:
                 self.process.kill()
             await asyncio.wait_for(self.process.wait(), 1)
-        except asyncio.TimeoutError as error:
+        except TimeoutError as error:
             raise RuntimeError("Subprocess exit could not be confirmed within 1000ms.") from error
         finally:
             self._transport.close()

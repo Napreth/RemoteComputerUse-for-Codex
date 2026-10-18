@@ -6,6 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import urlsplit
 
 import pytest
 from PIL import Image
@@ -17,6 +18,26 @@ from app.backends.vnc.remote_control import VncRemoteControlAdapter
 from app.computer_session import ComputerSession
 from app.remote.computer import RemoteComputer
 from app.remote.worker import handle_request
+
+
+@pytest.mark.parametrize("kind", ["rdp", "vnc"])
+@pytest.mark.parametrize(("host", "expected"), [
+    ("192.0.2.10", "192.0.2.10"), ("RDP.Example", "rdp.example"),
+    ("::1", "::1"), ("[::1]", "::1"), ("2001:0db8::1", "2001:db8::1"),
+])
+def test_target_is_a_parseable_remote_uri(kind, host, expected):
+    adapter = SimpleNamespace(width=64, height=48, connected=True, connect=AsyncMock(), disconnect=AsyncMock())
+    backend = RDPBackend if kind == "rdp" else VNCBackend
+    config = RdpConfig(host=host, port=3389, username="fixture") if kind == "rdp" else VncConfig(host=host, port=5900)
+    session = ComputerSession({kind: lambda: backend(lambda: adapter)})
+    computer = RemoteComputer(config, session=session)
+    try:
+        parsed = urlsplit(computer.target)
+        assert (parsed.scheme, parsed.hostname, parsed.port) == (kind, expected, config.port)
+        if ":" in expected:
+            assert computer.target == f"{kind}://[{expected}]:{config.port}"
+    finally:
+        computer.close()
 
 
 @pytest.fixture
@@ -37,6 +58,48 @@ def remote():
         yield computer, adapter
     finally:
         computer.close()
+
+
+@pytest.mark.parametrize("steps", [1, 99])
+@pytest.mark.parametrize("duration", [0, 0.05, 0.12])
+def test_explicit_drag_steps_control_trajectory_and_duration(remote, monkeypatch, steps, duration):
+    computer, adapter = remote
+    computer.moveTo(2, 4)
+    adapter.move.reset_mock()
+    sleeps = []
+
+    async def sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr("app.remote.input_compat.asyncio.sleep", sleep)
+    tween = Mock(side_effect=lambda value: value)
+    computer.drag_to((40, 30), duration=duration, steps=steps, tween=tween)
+    assert adapter.move.await_count == steps
+    assert adapter.move.await_args.args == (40, 30)
+    assert [call.args[0] for call in tween.call_args_list] == [index / steps for index in range(1, steps + 1)]
+    assert adapter.mouse_button.await_args_list[-2].args == (2, 4, "left", True)
+    assert adapter.mouse_button.await_args_list[-1].args == (40, 30, "left", False)
+    assert sum(sleeps) == pytest.approx(duration)
+
+
+def test_drag_without_steps_keeps_duration_based_sampling(remote, monkeypatch):
+    computer, adapter = remote
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr("app.remote.input_compat.asyncio.sleep", sleep)
+    computer.dragTo(40, 30, duration=0.12)
+    assert adapter.move.await_count == 6
+
+
+@pytest.mark.parametrize("steps", [0, 100, 1.5])
+def test_invalid_drag_steps_do_not_send_input(remote, steps):
+    computer, adapter = remote
+    with pytest.raises((ValueError, TypeError)):
+        computer.drag_to(40, 30, steps=steps)
+    adapter.move.assert_not_awaited()
+    adapter.mouse_button.assert_not_awaited()
 
 
 @pytest.fixture

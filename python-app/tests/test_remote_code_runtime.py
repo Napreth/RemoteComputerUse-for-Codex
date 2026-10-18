@@ -12,6 +12,7 @@ from app.backends.config import RdpConfig
 from app.plugin_session import PluginSessions, SessionEntry
 from app.processes import OwnedProcess
 from app.remote.runtime import (
+    RemotePythonOperationError,
     RemotePythonRuntime,
     RemotePythonRuntimeError,
     RemotePythonStartupCleanupError,
@@ -20,6 +21,138 @@ from app.remote.runtime import (
 
 FIXTURES = Path(__file__).parent / "fixtures"
 CONFIG = RdpConfig(host="fixture", port=3389, username="fixture")
+
+
+@pytest.fixture
+def real_worker_path(tmp_path: Path) -> Path:
+    """Use production protocol/REPL code with only desktop I/O replaced."""
+    path = tmp_path / "real_worker.py"
+    path.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(Path(__file__).parents[1])!r})\n"
+        "from PIL import Image\nfrom app.remote import worker\n"
+        "class Computer:\n"
+        "    backend='rdp'; target='rdp://fixture:3389'; width=2048; height=2048\n"
+        "    def __init__(self): self.image=Image.new('RGB', (4, 3), 'navy')\n"
+        "    def status(self): return {'connected':True, 'inputHeld':False, 'backend':'rdp', "
+        "'host':'fixture', 'port':3389, 'width':self.width, 'height':self.height}\n"
+        "    def screenshot(self): return self.image\n"
+        "    def run_actions(self, actions): return self.image\n"
+        "    def close(self): pass\n"
+        "worker.RemoteComputer=Computer\nworker.main()\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.fixture
+async def real_runtime(real_worker_path):
+    session = await launch_remote_python_runtime(
+        CONFIG, worker_path=real_worker_path, release_helper_path=FIXTURES / "release_inputs.py",
+    )
+    try:
+        yield session
+    finally:
+        await session.close()
+
+
+async def test_background_stdout_cannot_corrupt_real_worker_protocol(real_runtime, real_worker_path, tmp_path, monkeypatch):
+    session = real_runtime
+    launch = AsyncMock(return_value=session)
+    monkeypatch.setattr("app.plugin_session.launch_remote_python_runtime", launch)
+    sessions = PluginSessions()
+    await sessions.connect(CONFIG, "x")
+    gate, done, released = tmp_path / "print-now", tmp_path / "printed", tmp_path / "released"
+    helper = tmp_path / "release.py"
+    helper.write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "assert json.loads(sys.stdin.readline())['identities']==[20320]\n"
+        f"Path({str(released)!r}).touch()\nprint('{{\"released\":true}}')\n", encoding="utf-8",
+    )
+    session.release_helper_path = str(helper)
+    await session.execute(
+        "import os, sys, threading, time, subprocess\nfrom pathlib import Path\n"
+        "from app.input_tracking import InputTracker\ncounter=41\n"
+        "def background():\n"
+        f"    while not Path({str(gate)!r}).exists(): time.sleep(0.01)\n"
+        "    InputTracker('rdp').record([20320])\n"
+        "    print('BACKGROUND_OUTPUT', flush=True)\n"
+        "    sys.__stdout__.write('{\"kind\":\"input_identity\",\"protocol\":\"vnc\"}\\n')\n"
+        "    sys.__stdout__.flush()\n"
+        "    os.write(1, b'RAW_OUTPUT\\n')\n"
+        "    subprocess.run([sys.executable, '-c', \"print('CHILD_OUTPUT')\"], "
+        "stdin=subprocess.DEVNULL, timeout=5, check=True)\n"
+        f"    Path({str(done)!r}).touch()\n"
+        "thread=threading.Thread(target=background, daemon=True)\nthread.start()"
+    )
+    gate.touch()
+    async with asyncio.timeout(10):
+        while not done.exists():
+            await asyncio.sleep(0.01)
+    result = await session.execute("thread.join(); log(counter + 1)")
+    assert result["output"] == [{"type": "input_text", "text": "42"}]
+    assert session._identity_error is None
+    assert session._pending_identities == {20320}
+    assert session.connected
+    await sessions.disconnect("x")
+    assert await sessions.list_sessions() == []
+    assert released.exists()
+    replacement = await launch_remote_python_runtime(
+        CONFIG, worker_path=real_worker_path, release_helper_path=FIXTURES / "release_inputs.py",
+    )
+    launch.return_value = replacement
+    try:
+        assert (await sessions.connect(CONFIG, "x"))["connected"] is True
+        await sessions.disconnect("x")
+    finally:
+        await replacement.close()
+
+
+@pytest.mark.parametrize("operation", ["screenshot", "actions"])
+async def test_oversized_png_is_recoverable_in_real_worker(real_runtime, operation):
+    session = real_runtime
+    result = await session.execute(
+        "import io, random\ncounter=41\n"
+        "computer.image=Image.frombytes('RGB', (2048, 2048), random.Random(0).randbytes(2048*2048*3))\n"
+        "buffer=io.BytesIO(); computer.image.save(buffer, format='PNG')\nlog(len(buffer.getvalue()))"
+    )
+    png_bytes = int(result["output"][0]["text"])
+    assert 4 * ((png_bytes + 2) // 3) > 12 * 1024 * 1024
+    with pytest.raises(RemotePythonOperationError, match="8 MiB"):
+        if operation == "screenshot":
+            await session.capture_screenshot()
+        else:
+            await session.run_actions([])
+    assert session._identity_error is None
+    assert session.connected
+    result = await session.execute("log(counter + 1); computer.image=Image.new('RGB', (4,3))")
+    assert result["output"] == [{"type": "input_text", "text": "42"}]
+    assert (await session.capture_screenshot()).startswith(b"\x89PNG\r\n\x1a\n")
+    assert (await session.status())["connected"] is True
+    await session.close()
+
+
+async def test_oversized_screenshot_does_not_block_same_session_name(monkeypatch, real_worker_path):
+    async def launch(config):
+        return await launch_remote_python_runtime(
+            config, worker_path=real_worker_path, release_helper_path=FIXTURES / "release_inputs.py",
+        )
+    monkeypatch.setattr("app.plugin_session.launch_remote_python_runtime", launch)
+    sessions = PluginSessions()
+    try:
+        await sessions.connect(CONFIG, "x")
+        await sessions.execute(
+            "import random\ncomputer.image=Image.frombytes('RGB', (2048,2048), random.Random(0).randbytes(2048*2048*3))",
+            "x",
+        )
+        with pytest.raises(RemotePythonOperationError, match="8 MiB"):
+            await sessions.screenshot("x")
+        await sessions.disconnect("x")
+        assert await sessions.list_sessions() == []
+        assert (await sessions.connect(CONFIG, "x"))["connected"] is True
+    finally:
+        if await sessions.list_sessions():
+            await sessions.disconnect("x")
 
 
 async def runtime(**kwargs):

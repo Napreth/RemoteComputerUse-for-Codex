@@ -13,7 +13,14 @@ from typing import Any
 
 from ..backends import BackendConfig, RdpConfig, VncConfig
 from ..input_tracking import validate_identities
-from ..processes import OwnedProcess, assert_active, await_active, child_environment, drain_tail
+from ..processes import (
+    MAX_PROCESS_OUTPUT_BYTES,
+    OwnedProcess,
+    assert_active,
+    await_active,
+    child_environment,
+    drain_tail,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +229,7 @@ class RemotePythonRuntime:
                 ) from error
             except (ValueError, asyncio.LimitOverrunError) as error:
                 raise RemotePythonRuntimeError("Python output exceeds 12 MiB.") from error
-            if len(line) > 12 * 1024 * 1024:
+            if len(line) > MAX_PROCESS_OUTPUT_BYTES:
                 raise RemotePythonRuntimeError("Python output exceeds 12 MiB.")
             try:
                 value = json.loads(line)

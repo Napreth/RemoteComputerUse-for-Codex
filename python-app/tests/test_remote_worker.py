@@ -161,7 +161,29 @@ def test_identity_and_response_frames_do_not_interleave(monkeypatch):
             chunks.append(value[middle:])
         def flush(self):
             pass
-    monkeypatch.setattr(worker.sys, "__stdout__", SlowOutput())
+    monkeypatch.setattr(worker, "_protocol_output", SlowOutput())
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda value: worker.emit({"id": value}), range(20)))
     assert {json.loads(line)["id"] for line in "".join(chunks).splitlines()} == set(range(20))
+
+
+def test_oversized_response_is_replaced_before_emitting_any_protocol_bytes(monkeypatch):
+    from app.remote import worker
+
+    class LargeStatusComputer(FakeComputer):
+        def status(self):
+            return {"connected": True, "inputHeld": True, "padding": "x" * 1000}
+
+    stream = io.StringIO()
+    monkeypatch.setattr(worker, "_protocol_output", stream)
+    monkeypatch.setattr(worker, "MAX_PROCESS_OUTPUT_BYTES", 512)
+    requests = [{"id": 1, "operation": "status"}, {"id": 2, "operation": "execute", "code": "log(42)"}]
+    serve_requests({"computer": LargeStatusComputer()}, io.StringIO("\n".join(map(json.dumps, requests)) + "\n"))
+    lines = stream.getvalue().splitlines(keepends=True)
+    assert len(lines) == 2 and all(len(line.encode()) <= 512 for line in lines)
+    first, second = map(json.loads, lines)
+    assert first["id"] == 1
+    assert first["error"]["code"] == "python_output_too_large"
+    assert first["error"]["recoverable"] is True
+    assert first["connected"] is True and first["inputHeld"] is True
+    assert second["id"] == 2 and second["output"] == [{"type": "input_text", "text": "42"}]

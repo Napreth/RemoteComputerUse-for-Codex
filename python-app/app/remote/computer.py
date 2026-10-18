@@ -21,6 +21,7 @@ from PIL import Image
 
 from ..actions import Point, parse_computer_action
 from ..backends import BackendConfig, load_backend_config
+from ..backends.config import host_for_uri
 from ..computer_session import ComputerSession
 from .input_compat import integer, normalize_button, perform, seconds
 
@@ -55,6 +56,7 @@ class RemoteComputer:
         session: ComputerSession | None = None,
     ) -> None:
         self._config = config or load_backend_config()
+        target_host = host_for_uri(self._config.host)
         self._session = session or ComputerSession()
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._serve_loop, name="remote-computer-io", daemon=True)
@@ -68,7 +70,7 @@ class RemoteComputer:
         self.width = int(status["width"])
         self.height = int(status["height"])
         self.backend = str(status["backend"])
-        self.target = f"{self.backend}://{status['host']}:{status['port']}"
+        self.target = f"{self.backend}://{target_host}:{status['port']}"
 
     def _serve_loop(self) -> None:
         asyncio.set_event_loop(self._loop)
@@ -212,12 +214,14 @@ class RemoteComputer:
         duration: float = 0,
         tween: Callable[[float], float] = linear,
         button: str | int = "left",
-        steps: int = 12,
+        steps: int | None = None,
     ) -> None:
-        if not 1 <= steps <= 99:
-            raise ValueError("steps must be between 1 and 99")
+        if steps is not None:
+            steps = integer(steps)
+            if not 1 <= steps <= 99:
+                raise ValueError("steps must be between 1 and 99")
         self._input("drag", x=x, y=y, duration=seconds(duration), tween=tween,
-                    button=normalize_button(button))
+                    button=normalize_button(button), steps=steps)
 
     dragTo = drag_to
 
