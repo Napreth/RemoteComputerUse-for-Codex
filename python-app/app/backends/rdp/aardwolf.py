@@ -14,6 +14,10 @@ from .keys import CONTROL_KEY_ALIASES, IGNORED_WINDOWS_KEYS, SCANCODES, key_scan
 
 _RDP_TERMINATE_TIMEOUT = 5.0
 _RDP_HARD_CLOSE_TIMEOUT = 1.0
+# Successful writes to the transport do not mean the guest application has
+# consumed VK_PACKET input. Back-to-back down/up events lose text in Win11
+# Notepad; pace both edges, including the gap before the next UTF-16 unit.
+_RDP_TEXT_EVENT_DELAY = 0.1
 logger = logging.getLogger(__name__)
 
 
@@ -258,16 +262,18 @@ class AardwolfAdapter:
                 continue
             if character in CONTROL_KEY_ALIASES:
                 await self.key_event(character, True)
+                await asyncio.sleep(_RDP_TEXT_EVENT_DELAY)
                 await self.key_event(character, False)
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(_RDP_TEXT_EVENT_DELAY)
                 continue
             encoded = character.encode("utf-16-le")
             for index in range(0, len(encoded), 2):
                 code_unit = int.from_bytes(encoded[index : index + 2], "little")
                 unit = _Utf16CodeUnit(code_unit) if 0xD800 <= code_unit <= 0xDFFF else chr(code_unit)
                 _unwrap(await connection.send_key_char(unit, True), "RDP key press")
+                await asyncio.sleep(_RDP_TEXT_EVENT_DELAY)
                 _unwrap(await connection.send_key_char(unit, False), "RDP key release")
-                await asyncio.sleep(0.001)
+                await asyncio.sleep(_RDP_TEXT_EVENT_DELAY)
 
     async def key_event(self, key: str, pressed: bool) -> None:
         resolved = key_scancode(key)

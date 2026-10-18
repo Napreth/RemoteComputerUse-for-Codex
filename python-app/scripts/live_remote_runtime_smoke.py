@@ -76,7 +76,9 @@ async def main() -> None:
         )
         runtime = None
         try:
-            runtime = await launch_remote_python_runtime(config, execution_timeout_ms=90_000)
+            # The guest verification command is long and RDP text events are
+            # paced; this bound covers typing it as well as guest execution.
+            runtime = await launch_remote_python_runtime(config, execution_timeout_ms=180_000)
             await wait_for_visual_ready(runtime)
             first = await runtime.execute(textwrap.dedent("""\
                 import os, time

@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+import base64
+import json
+import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from scripts.live_remote_runtime_smoke import exercise_code, validate_result
@@ -40,3 +46,60 @@ def test_smoke_exercises_current_facade_through_terminal_marker(backend):
          "time": SimpleNamespace(sleep=lambda duration: None)})
     assert text[-1] == "exercise_completed"
     assert len(images) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "runtime", "cleanup"])
+async def test_notepad_smoke_requires_full_execution_and_successful_cleanup(tmp_path, monkeypatch, failure):
+    from app.backends.config import RdpConfig
+    from scripts import live_rdp_typing_smoke as smoke
+    monkeypatch.setattr(time, "sleep", lambda duration: None)
+
+    class Computer:
+        text = ""
+
+        def write(self, text, interval=0):
+            self.text = text
+
+        def run_actions(self, actions):
+            self.text = actions[0]["text"]
+
+        def hotkey(self, *keys):
+            pass
+
+    computer = Computer()
+
+    async def execute(code):
+        output = []
+        exec(code, {  # noqa: S102 - trusted smoke snippet, no real guest or host input
+            "computer": computer, "log": lambda value: output.append({"type": "input_text", "text": value}),
+        })
+        if failure == "runtime":
+            output.append({"type": "input_text", "text": "Traceback: failed after early marker"})
+        return {"output": output}
+
+    def guest_request(config, vm_name, action, path=""):
+        value = base64.b64encode(computer.text.encode()).decode() if action == "read" else "test-version"
+        return {"result": value, "addresses": ["127.0.0.1"]}
+
+    runtime = SimpleNamespace(
+        execute=execute, capture_screenshot=AsyncMock(return_value=b"test-frame"),
+        close=AsyncMock(side_effect=RuntimeError("release failed") if failure == "cleanup" else None),
+    )
+    monkeypatch.setattr(smoke, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(smoke, "__file__", str(tmp_path / "python-app/scripts/typing.py"))
+    monkeypatch.setattr(smoke, "load_profile", lambda name: RdpConfig(host="127.0.0.1", port=3389, username="test"))
+    monkeypatch.setattr(smoke, "guest_request", guest_request)
+    monkeypatch.setattr(smoke, "run_command", AsyncMock())
+    monkeypatch.setattr(smoke, "launch_remote_python_runtime", AsyncMock(return_value=runtime))
+    monkeypatch.setattr(smoke, "socket", SimpleNamespace(
+        SOCK_STREAM=1, getaddrinfo=lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 3389))],
+    ))
+    if failure:
+        with pytest.raises(RuntimeError, match="did not complete|release failed"):
+            await smoke.main("disposable-vm", "test-profile")
+    else:
+        await smoke.main("disposable-vm", "test-profile")
+    report = json.loads((tmp_path / "test-artifacts/rdp-notepad-typing.json").read_text())
+    assert report["passed"] is (failure is None)
+    runtime.close.assert_awaited_once()

@@ -143,6 +143,83 @@ async def test_rdp_text_uses_utf16_units_including_surrogate_pairs() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rdp_string_typing_paces_each_event_without_changing_utf16_order(monkeypatch):
+    events = []
+
+    async def send_char(character, pressed):
+        events.append(("unicode", int.from_bytes(character.encode("utf-16-le"), "little"), pressed))
+        return True, None
+
+    async def send_scan(scancode, pressed, extended):
+        events.append(("scan", scancode, pressed))
+        assert not extended
+        return True, None
+
+    async def pause(seconds):
+        events.append(("wait", seconds))
+
+    monkeypatch.setattr(rdp_module.asyncio, "sleep", pause)
+    adapter = AardwolfAdapter()
+    adapter._connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_char=send_char, send_key_scancode=send_scan,
+    )
+    await adapter.type_text("a你😀\t\n\b\r")
+    expected = []
+    for kind, value in (("unicode", ord("a")), ("unicode", ord("你")),
+                        ("unicode", 0xD83D), ("unicode", 0xDE00),
+                        ("scan", 0x0F), ("scan", 0x1C), ("scan", 0x0E)):
+        expected += [(kind, value, True), ("wait", 0.1), (kind, value, False), ("wait", 0.1)]
+    assert events == expected
+    events.clear()
+    await adapter.type_text("")
+    await adapter.type_text("\r")
+    assert events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["你", "😀", "\t"])
+async def test_rdp_cancellation_during_text_pacing_preserves_release_identities(monkeypatch, text):
+    frames = []
+    monkeypatch.setattr("app.input_tracking._observer", lambda protocol, values: frames.append((protocol, values)))
+    sleeping = asyncio.Event()
+
+    async def pause(seconds):
+        sleeping.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(rdp_module.asyncio, "sleep", pause)
+    connection = SimpleNamespace(
+        disconnected_evt=SimpleNamespace(is_set=lambda: False),
+        send_key_char=AsyncMock(return_value=(True, None)),
+        send_key_scancode=AsyncMock(return_value=(True, None)),
+        send_mouse=AsyncMock(return_value=(True, None)),
+    )
+    adapter = AardwolfAdapter()
+    adapter._connection = connection
+    adapter._mouse_buttons = SimpleNamespace(MOUSEBUTTON_LEFT=1, MOUSEBUTTON_RIGHT=2, MOUSEBUTTON_MIDDLE=3)
+    task = asyncio.create_task(adapter.type_text(text))
+    await asyncio.wait_for(sleeping.wait(), 1)
+    # The parent already knows about the input before the newly added cancel
+    # point, so an interrupted key-down can still be released by the helper.
+    assert frames
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await adapter.release_inputs()
+    if text == "\t":
+        assert frames == [("rdp", [])]
+        assert (0x0F, False, False) in [call.args for call in connection.send_key_scancode.await_args_list]
+    else:
+        encoded = text.encode("utf-16-le")
+        identities = {int.from_bytes(encoded[i:i + 2], "little") for i in range(0, len(encoded), 2)}
+        assert adapter._input_tracker.identities == identities
+        released = {int.from_bytes(call.args[0].encode("utf-16-le"), "little")
+                    for call in connection.send_key_char.await_args_list if call.args[1] is False}
+        assert released == identities
+
+
+@pytest.mark.asyncio
 async def test_rdp_string_typing_uses_scancodes_for_control_literals() -> None:
     events: list[tuple[str, object, bool]] = []
 

@@ -33,6 +33,10 @@ Set `REMOTE_COMPUTER_BACKEND` to `rdp` (the default) or `vnc`. Explicit argument
 
 The ZIP includes `python-app/.python-version` to request Python 3.12 through uv's normal project discovery; Host-provided `UV_PYTHON` remains an explicit override. If uv fails while querying `.venv/Scripts/python.exe` before MCP initialization, inspect its stderr. A missing `pyvenv.cfg` indicates an incomplete virtual environment, and adding the version file alone cannot repair that existing environment. Stop the plugin, rename only the generated `.venv` shown in the error to a backup name, then restart with the corrected package so uv can rebuild it. When using `UV_PROJECT_ENVIRONMENT`, repair that user-selected environment instead. Keep connection configuration and project sources intact.
 
+## Live RDP typing regression
+
+From a source checkout on a Windows Hyper-V host, run `uv run --frozen --project python-app python python-app/scripts/live_rdp_typing_smoke.py --vm-name "<disposable VM>" --profile "<RDP profile>"`. The selected RDP account must also permit PowerShell Direct. The script verifies the target IP, creates a new empty Notepad file per case, types through RDP, saves, and reads back the entire text through PowerShell Direct. It covers repeated English/Chinese/emoji text, explicit `interval`, tabs/newlines and atomic typing. Only CRLF is normalized; no text is trimmed. Results and a screenshot go to `test-artifacts/rdp-notepad-typing.*`. The script does not restore the VM; restore its checkpoint after testing. Font glyphs are not used to judge input integrity.
+
 ## Retained Labs workflow
 
 Labs run from the source checkout's runner and Console; they are not bundled in the upload ZIP. Windows navigation requires Win+R and Edge. Set `REMOTE_COMPUTER_GUEST_OS=windows`; for VNC, verify that the server forwards Win+R and explicitly set `REMOTE_COMPUTER_VNC_WINDOWS_NAVIGATION=win-r`. Other shortcut mappings are unsupported; navigation uses no fixed taskbar coordinates.

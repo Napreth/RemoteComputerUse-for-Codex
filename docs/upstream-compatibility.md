@@ -69,6 +69,11 @@ Ordinary output is isolated from protocol frames.
   Tab, Return and Backspace scancodes in both string typing and key calls.
   The `\r` literal is a no-op, matching PyAutoGUI 0.9.54 on Windows; use
   `\n`, `enter` or `return` to send Return.
+  String typing waits 100 ms after each key-down and key-up (per UTF-16 unit,
+  including control literals) for Windows 11 Notepad compatibility. This
+  transport pacing is additional to the caller's `interval`; separate key
+  calls and VNC are unchanged. Large texts should use bounded chunks to stay
+  within the execution deadline. A successful send is not a guest text read-back.
 - VNC string typing and key calls resolve Tab, Return, Backspace, Escape and
   Delete literals to X11 keysyms. Other C0/C1 control characters fail
   explicitly rather than sending invalid KeyEvent values.
