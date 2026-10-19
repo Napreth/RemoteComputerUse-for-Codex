@@ -14,9 +14,49 @@ The file uses integer `version: 1` and a `profiles` array. Profile names must be
 
 `passwdenv` accepts letters, digits and underscores and cannot start with a digit. It is mutually exclusive with `password`; a missing referenced variable is an error. Referenced credential variables are removed from worker environments before launch, while the parent retains the resolved credentials for cleanup. This does not isolate credentials from same-account Python.
 
-A profile cannot be combined with explicit connection overrides. Each connection captures its resolved settings, so later edits do not redirect an existing session or its emergency release connection.
+A saved profile cannot be combined with explicit overrides in `computer_connect`. Each connection captures its resolved settings, so later edits do not redirect an existing session or its emergency release connection.
 
 Hosts accept DNS names, ASCII internal names such as `rdp_service`, IPv4 and IPv6 (optionally bracketed). Internationalized names use IDNA2008 with UTS #46 nontransitional processing. Ports are separate fields; URLs, userinfo, paths, query strings, fragments, percent escapes, IPv6 scope identifiers and ambiguous numeric IPv4 forms are rejected.
+
+## Agent-supplied connection fields
+
+Two independent top-level switches in `config.json` default to `false`:
+
+| Switch | Additional MCP tool when enabled |
+| --- | --- |
+| `enableDeclareAsFillByAgent` | `computer_connect_filled_profile(profile, fields, name=None)` |
+| `enableProfileFromAgent` | `computer_connect_from_agent(backend, host, ..., name=None)` |
+
+Restart the MCP server after changing a switch to refresh tool discovery. Each connection call also re-reads the file: disabling a switch immediately prevents new calls through that tool, even if the client has cached its schema. Missing or invalid configuration never enables these tools and does not prevent MCP initialization.
+
+For a saved template, declare the fields Agent may supply with `fillByAgent`. `host` and RDP `username` may be omitted from the file only when declared. Supply every declared field on each connection; undeclared fields are rejected. The values are validated together with the saved fields and used only for that connection. The server never writes them back to `config.json` or changes process environment variables.
+
+```json
+{
+  "version": 1,
+  "enableDeclareAsFillByAgent": true,
+  "enableProfileFromAgent": true,
+  "profiles": [
+    {"name": "vm-dev", "type": "rdp", "username": "alice", "fillByAgent": ["host", "password"]}
+  ]
+}
+```
+
+With declaration filling enabled, `computer_list_profiles()` returns `fillByAgent` field names alongside each template's name/type, never saved values. Connect using:
+
+```text
+computer_connect_filled_profile(profile="vm-dev", fields={"host": "192.0.2.10", "password": "<user-provided password>"}, name="work")
+```
+
+Declarations may include only connection fields supported by that profile: `type`, `host`, `port`, `password`, RDP `username`/`domain`/`width`/`height`/`insecure_tls`, or VNC `shared`. `name`, `passwdenv` and `fillByAgent` itself are forbidden. A template declaring `password` cannot also use `passwdenv`. Changing `type` still requires a valid complete profile for the resulting backend; incompatible saved fields are rejected. When the switch is off, declarations are not exposed and ordinary connections require complete saved settings.
+
+With `enableProfileFromAgent` enabled, Agent may provide all connection settings directly without selecting or saving a profile:
+
+```text
+computer_connect_from_agent(backend="rdp", host="192.0.2.10", username="alice", password="<user-provided password>", name="work")
+```
+
+The direct tool accepts `rdp` or `vnc`, requires `host` and RDP `username`, and uses the same port/dimension/TLS/shared defaults and validation as saved profiles. It does not inherit `REMOTE_COMPUTER_*` values. `name` still identifies the runtime session; it does not create a saved profile. `passwdenv` is not an Agent input. Enabling either feature permits passwords in the corresponding tool arguments and conversation/client history. Existing default tools continue to omit a password argument.
 
 ## Existing environment connections
 

@@ -98,6 +98,56 @@ async def test_startup_budget_includes_spawn_and_initialize(monkeypatch: pytest.
                 pytest.fail("Startup exceeded its shared spawn/initialize budget")
 
 
+@pytest.mark.parametrize(("fill", "direct"), [(False, False), (True, False), (False, True), (True, True)])
+async def test_real_mcp_process_exposes_only_user_enabled_agent_tools(tmp_path: Path, fill: bool, direct: bool):
+    config = tmp_path / "remote-computer-use" / "config.json"
+    config.parent.mkdir()
+    config.write_text(json.dumps({
+        "version": 1, "enableDeclareAsFillByAgent": fill, "enableProfileFromAgent": direct,
+        "profiles": [{"name": "template", "type": "rdp", "username": "alice", "fillByAgent": ["host", "password"]}],
+    }), encoding="utf-8")
+    before = config.read_bytes()
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("REMOTE_COMPUTER_")}
+    environment.update({"LOCALAPPDATA": str(tmp_path), "XDG_CONFIG_HOME": str(tmp_path)})
+    parameters = StdioServerParameters(
+        command=sys.executable, args=["-m", "app.mcp_server"],
+        cwd=Path(__file__).parents[1], env=environment,
+    )
+    async with _startup_client(parameters) as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+        assert len(tools) == 14 + int(fill) + int(direct)
+        assert ("computer_connect_filled_profile" in tools) is fill
+        assert ("computer_connect_from_agent" in tools) is direct
+        assert "password" not in tools["computer_connect"].input_schema["properties"]
+        listed = await client.call_tool("computer_list_profiles", {})
+        expected = {"name": "template", "type": "rdp"}
+        if fill:
+            expected["fillByAgent"] = ["host", "password"]
+        assert listed.structured_content == {"profiles": [expected]}
+        # Invalid authority must fail before worker launch; never connect to a VM.
+        for tool, arguments in (
+            ("computer_connect_filled_profile", {
+                "profile": "template", "fields": {"host": "localhost@evil.example", "password": "secret-needle"},
+            }),
+            ("computer_connect_from_agent", {
+                "backend": "rdp", "host": "localhost@evil.example", "username": "alice", "password": "secret-needle",
+            }),
+        ):
+            rejected = await client.call_tool(tool, arguments)
+            assert rejected.is_error is True
+            assert "secret-needle" not in str(rejected.content)
+        for tool, arguments in (
+            ("computer_connect_filled_profile", {"fields": {"password": "secret-needle"}}),
+            ("computer_connect_from_agent", {"password": "secret-needle"}),
+            ("computer_connect_from_agent", {"backend": "vnc", "host": "localhost", "password": {"secret-needle": True}}),
+        ):
+            rejected = await client.call_tool(tool, arguments)
+            assert rejected.is_error is True
+            assert "secret-needle" not in str(rejected.content)
+        assert (await client.call_tool("computer_list", {})).structured_content == {"sessions": []}
+    assert config.read_bytes() == before
+
+
 def test_agent_plugin_manifest_uses_root_components() -> None:
     root = Path(__file__).parents[2]
     plugin = json.loads((root / "plugin.json").read_text(encoding="utf-8"))

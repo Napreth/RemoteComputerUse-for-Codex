@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import base64
 from typing import Annotated, Any
+from urllib.parse import quote
 
-from mcp.server.mcpserver import Image, MCPServer
+from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp_types import TextContent
-from pydantic import Field
+from mcp_types import CallToolResult, InputRequiredResult, TextContent
+from pydantic import Field, SecretStr, ValidationError
 
 from . import __version__
 from .actions import (
@@ -25,17 +26,43 @@ from .actions import (
     TypeAction,
 )
 from .backends import load_backend_config
-from .backends.config import Port, RdpHeight, RdpWidth
+from .backends.config import BackendConfig, BackendKind, Port, RdpHeight, RdpWidth
 from .plugin_session import PluginSessions
-from .profiles import list_profiles, load_profile
+from .profiles import (
+    ProfilesError,
+    agent_features,
+    list_profiles,
+    load_agent_profile,
+    load_filled_profile,
+    load_profile,
+)
 
-mcp = MCPServer(
+
+class RemoteComputerMCPServer(MCPServer):
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Context | None = None,
+    ) -> CallToolResult | InputRequiredResult:
+        try:
+            return await super().call_tool(name, arguments, context)
+        except ToolError as error:
+            # SDK argument errors include the raw request, which may contain a
+            # password even when a different required argument is missing.
+            if name in {"computer_connect_filled_profile", "computer_connect_from_agent"} and isinstance(
+                error.__cause__, ValidationError,
+            ):
+                raise ToolError(f"Invalid arguments for {name}; check required fields and value types.") from None
+            raise
+
+
+mcp = RemoteComputerMCPServer(
     "Remote Computer Use",
     version=__version__,
     instructions=(
         "Operate isolated computers through named persistent Python runtimes. "
         "Prefer computer_exec_py so several actions, screenshots, checks, and loops can run in one call. "
         "Use computer_list_profiles to discover local profile names, then computer_connect(profile=..., name=...). "
+        "If a profile lists fillByAgent, use computer_connect_filled_profile with exactly those fields when available. "
+        "computer_connect_from_agent is available only when explicitly enabled by the user. "
         "An empty profile list allows computer_connect(name=...) with existing environment settings. "
         "A session argument is optional while exactly one computer is connected and required when there are several. "
         "RDP and VNC are independent backends selected at connection time; atomic tools use the selected session."
@@ -64,8 +91,8 @@ async def computer_list() -> dict[str, list[dict[str, Any]]]:
 
 
 @mcp.tool()
-async def computer_list_profiles() -> dict[str, list[dict[str, str]]]:
-    """List profile names/types without secrets; a missing config file returns an empty list."""
+async def computer_list_profiles() -> dict[str, list[dict[str, Any]]]:
+    """List profile names/types and enabled fillByAgent field names, without saved values or secrets."""
     try:
         return {"profiles": await asyncio.to_thread(list_profiles)}
     except Exception as error:
@@ -97,6 +124,68 @@ async def computer_connect(
         return await sessions.connect(config, name)
     except Exception as error:
         raise _tool_error(error) from error
+
+
+async def _connect_agent_config(config: BackendConfig, name: str | None) -> dict[str, Any]:
+    try:
+        return await sessions.connect(config, name)
+    except Exception as error:  # noqa: BLE001 - redact backend failures before returning them through MCP
+        message = str(error)
+        if config.password:
+            for secret in (config.password, quote(config.password, safe="")):
+                message = message.replace(secret, "[redacted]")
+        raise ToolError(message) from None
+
+
+async def computer_connect_filled_profile(
+    profile: Annotated[str, Field(min_length=1, max_length=128)],
+    fields: dict[str, Any],
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Connect by supplying exactly the selected profile's fillByAgent fields; never saves them to disk."""
+    try:
+        config = await asyncio.to_thread(load_filled_profile, profile, fields)
+    except Exception as error:
+        raise _tool_error(error) from error
+    return await _connect_agent_config(config, name)
+
+
+async def computer_connect_from_agent(
+    backend: BackendKind,
+    host: str,
+    name: str | None = None,
+    port: Port | None = None,
+    username: str | None = None,
+    password: SecretStr | None = None,
+    domain: str | None = None,
+    width: RdpWidth | None = None,
+    height: RdpHeight | None = None,
+    insecure_tls: Annotated[bool | None, Field(strict=True)] = None,
+    shared: Annotated[bool | None, Field(strict=True)] = None,
+) -> dict[str, Any]:
+    """Connect with Agent-provided RDP/VNC settings, including password, without saving a profile or reading env defaults."""
+    values = {key: value for key, value in {
+        "type": backend, "host": host, "port": port, "username": username, "password": password,
+        "domain": domain, "width": width, "height": height, "insecure_tls": insecure_tls, "shared": shared,
+    }.items() if value is not None}
+    try:
+        config = await asyncio.to_thread(load_agent_profile, values)
+    except Exception as error:
+        raise _tool_error(error) from error
+    return await _connect_agent_config(config, name)
+
+
+def register_agent_tools(server: MCPServer) -> None:
+    # Invalid/missing user configuration must not prevent MCP initialization.
+    # Connection calls re-read it and enforce the current switches each time.
+    try:
+        fill_enabled, direct_enabled = agent_features()
+    except ProfilesError:
+        return
+    if fill_enabled:
+        server.add_tool(computer_connect_filled_profile)
+    if direct_enabled:
+        server.add_tool(computer_connect_from_agent)
 
 
 @mcp.tool()
@@ -243,6 +332,7 @@ async def computer_disconnect(session: str | None = None) -> str:
 
 
 def main() -> None:
+    register_agent_tools(mcp)
     mcp.run(transport="stdio")
 
 

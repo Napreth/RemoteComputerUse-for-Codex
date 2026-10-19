@@ -34,6 +34,8 @@ Use unique profile names and either `password` or `passwdenv`. The latter names 
 
 Profiles are reread for each connection; edits do not change existing sessions. Existing `REMOTE_COMPUTER_*` connections remain supported without `profile`. The runtime does not load `.env` or set `UV_*` defaults. See [configuration reference](docs/configuration.md) for optional fields, environment variables and Labs setup.
 
+Agent-supplied settings are optional and disabled by default. Set `enableDeclareAsFillByAgent: true` at the top level to let Agent fill a profile's declared fields, such as `fillByAgent: ["host", "password"]`; set `enableProfileFromAgent: true` to expose a direct connection tool. Values apply only to that connection and are never saved. See [Agent-supplied connection fields](docs/configuration.md#agent-supplied-connection-fields) for examples.
+
 ## Use
 
 Start a Codex conversation and ask it to use a configured remote computer. The basic tool flow is:
@@ -60,7 +62,7 @@ display(computer.screenshot())
 
 ## Security and recovery
 
-`computer_exec_py` runs full Python under the MCP server's OS account; **it is not a sandbox**. RDP/VNC input targets the remote desktop, but Python can access host files, processes and networks. Plaintext profile passwords are therefore readable by same-account code. Keep configuration outside the repository and ZIP, restrict its permissions, and use an isolated account or VM for untrusted code. Passwords are not tool arguments.
+`computer_exec_py` runs full Python under the MCP server's OS account; **it is not a sandbox**. RDP/VNC input targets the remote desktop, but Python can access host files, processes and networks. Plaintext profile passwords are therefore readable by same-account code. Keep configuration outside the repository and ZIP, restrict its permissions, and use an isolated account or VM for untrusted code. Passwords are excluded from default tools; enabling Agent-supplied settings permits them in tool arguments and conversation/client history.
 
 VNC supports RFB 3.8 with Raw encoding and None/VNC-password authentication, without TLS; use a protected network or tunnel. Interrupted input triggers bounded release attempts. If cleanup fails, recover the remote input state and restart the plugin server before reusing the blocked session name.
 

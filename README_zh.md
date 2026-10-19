@@ -34,6 +34,8 @@ Profile 名不能重复，`password` 与 `passwdenv` 二选一；后者引用 MC
 
 每次连接重新读取配置，修改不影响已有会话。原有 `REMOTE_COMPUTER_*` 环境配置仍可在不指定 `profile` 时使用。运行时不加载 `.env`，也不设置 `UV_*` 默认值。可选字段、环境变量和 Labs 设置见[配置参考](docs/configuration.md)。
 
+AI 填写功能默认关闭。在配置顶层设置 `enableDeclareAsFillByAgent: true`，可让 AI 填写 Profile 的 `fillByAgent: ["host", "password"]` 等声明字段；设置 `enableProfileFromAgent: true`，可开放直接提供连接参数的工具。填写值仅用于当次连接，不写回文件。示例见[AI 填写配置](docs/configuration.md#agent-supplied-connection-fields)。
+
 ## 使用
 
 新开 Codex 会话，告诉它使用已配置的远程计算机。基本工具流程如下：
@@ -60,7 +62,7 @@ display(computer.screenshot())
 
 ## 安全与恢复
 
-`computer_exec_py` 在 MCP 服务的操作系统账号下执行完整 Python，**不是沙盒**。RDP/VNC 输入作用于远程桌面，但 Python 仍可访问宿主机文件、进程和网络，因此同账号代码也能读取配置中的明文密码。请把配置放在仓库和 ZIP 外并限制权限；不可信代码应放在隔离账号或虚拟机中运行。密码不作为工具参数。
+`computer_exec_py` 在 MCP 服务的操作系统账号下执行完整 Python，**不是沙盒**。RDP/VNC 输入作用于远程桌面，但 Python 仍可访问宿主机文件、进程和网络，因此同账号代码也能读取配置中的明文密码。请把配置放在仓库和 ZIP 外并限制权限；不可信代码应放在隔离账号或虚拟机中运行。默认工具没有密码参数；开启 AI 填写后，密码可出现在相应工具参数和会话／客户端记录中。
 
 VNC 支持 RFB 3.8、Raw 编码及 None/VNC 密码认证，不提供 TLS，请使用受保护的网络或隧道。输入中断时会限时尝试释放按键和鼠标按钮；若清理失败，请先恢复远程输入状态，再重启插件服务以复用被阻塞的会话名。
 

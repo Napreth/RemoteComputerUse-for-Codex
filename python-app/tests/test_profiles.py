@@ -19,8 +19,8 @@ def config_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def save(path: Path, *items: dict) -> None:
-    path.write_text(json.dumps({"version": 1, "profiles": items}), encoding="utf-8")
+def save(path: Path, *items: dict, **settings) -> None:
+    path.write_text(json.dumps({"version": 1, "profiles": items, **settings}), encoding="utf-8")
 
 
 def rdp(**values) -> dict:
@@ -276,3 +276,214 @@ async def test_profile_env_is_removed_before_worker_spawn(env_name, config_file,
     finally:
         await session.close()
     assert marker.read_text() == "released"
+
+
+def test_agent_features_default_off_even_when_called_directly(config_file):
+    assert profiles.agent_features() == (False, False)
+    with pytest.raises(ProfilesError, match="disabled"):
+        profiles.load_filled_profile("vm-dev", {"password": "secret-needle"})
+    with pytest.raises(ProfilesError, match="disabled"):
+        profiles.load_agent_profile({"type": "vnc", "host": "localhost", "password": "secret-needle"})
+    assert not config_file.exists()
+
+
+@pytest.mark.parametrize("switch", ["enableDeclareAsFillByAgent", "enableProfileFromAgent"])
+@pytest.mark.parametrize("value", [1, 0, "true", None])
+def test_agent_feature_switches_require_real_booleans(config_file, switch, value):
+    save(config_file, **{switch: value})
+    with pytest.raises(ProfilesError, match="Invalid Profiles"):
+        profiles.agent_features()
+
+
+@pytest.mark.parametrize("declared", [
+    ["name"], ["passwdenv"], ["fillByAgent"], ["unknown"], ["host", "host"], [1], "host",
+])
+def test_invalid_agent_field_declarations_are_rejected(config_file, declared):
+    save(config_file, rdp(fillByAgent=declared), enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="Invalid Profiles"):
+        list_profiles()
+
+
+def test_agent_fill_template_and_snapshot_do_not_persist_values(config_file, monkeypatch):
+    template = {"name": "vm-dev", "type": "rdp", "username": "alice", "fillByAgent": ["host", "password"]}
+    save(config_file, template, enableDeclareAsFillByAgent=True)
+    original = config_file.read_bytes()
+    environment = dict(os.environ)
+    assert list_profiles() == [{"name": "vm-dev", "type": "rdp", "fillByAgent": ["host", "password"]}]
+    with pytest.raises(ProfilesError, match="computer_connect_filled_profile"):
+        load_profile("vm-dev")
+    config = profiles.load_filled_profile("vm-dev", {"host": "faß.de", "password": "first-secret"})
+    assert (config.host, config.username, config.password) == ("xn--fa-hia.de", "alice", "first-secret")
+    assert "first-secret" not in repr(config)
+    assert config_file.read_bytes() == original
+    assert dict(os.environ) == environment
+    assert "first-secret" not in str(list_profiles())
+    other = profiles.load_filled_profile("vm-dev", {"host": "192.0.2.20", "password": "second-secret"})
+    assert (config.host, config.password) == ("xn--fa-hia.de", "first-secret")
+    assert (other.host, other.password) == ("192.0.2.20", "second-secret")
+    save(config_file, template, enableDeclareAsFillByAgent=False)
+    assert list_profiles() == [{"name": "vm-dev", "type": "rdp"}]
+    with pytest.raises(ProfilesError, match="disabled"):
+        profiles.load_filled_profile("vm-dev", {"host": "localhost", "password": "secret-needle"})
+
+
+@pytest.mark.parametrize("fields", [
+    {}, {"host": "localhost"}, {"host": "localhost", "password": "secret-needle", "name": "other"},
+    {"host": "localhost", "password": "secret-needle", "passwdenv": "OTHER_SECRET"},
+    {"host": "localhost", "password": "secret-needle", "username": "other"},
+    {"host": "localhost", "password": "secret-needle", "fillByAgent": ["username"]},
+])
+def test_agent_fill_cannot_change_undeclared_fields_or_omit_declared_fields(config_file, fields):
+    save(config_file, rdp(fillByAgent=["host", "password"]), enableDeclareAsFillByAgent=True)
+    before = config_file.read_bytes()
+    with pytest.raises(ProfilesError, match="exactly") as caught:
+        profiles.load_filled_profile("vm-dev", fields)
+    assert "secret-needle" not in str(caught.value)
+    assert config_file.read_bytes() == before
+
+
+@pytest.mark.parametrize("host", [None, "", "127.0.0.1@evil.example", "host?serverip=evil"])
+def test_agent_fill_still_validates_host_without_echoing_credentials(config_file, host):
+    save(config_file, rdp(fillByAgent=["host", "password"]), enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="Invalid Agent") as caught:
+        profiles.load_filled_profile("vm-dev", {"host": host, "password": "secret-needle"})
+    assert "secret-needle" not in str(caught.value)
+
+
+def test_agent_fill_declarations_must_match_backend_and_password_source(config_file):
+    for item in (
+        {"name": "vnc", "type": "vnc", "host": "localhost", "fillByAgent": ["username"]},
+        rdp(passwdenv="SAVED_SECRET", fillByAgent=["password"]),
+    ):
+        save(config_file, item, enableDeclareAsFillByAgent=True)
+        with pytest.raises(ProfilesError, match="Invalid Profiles"):
+            list_profiles()
+
+
+def test_agent_filled_username_and_vnc_defaults(config_file):
+    save(config_file, {"name": "rdp", "type": "rdp", "host": "localhost", "fillByAgent": ["username"]},
+         {"name": "vnc", "type": "vnc", "fillByAgent": ["host", "password"]},
+         enableDeclareAsFillByAgent=True)
+    assert profiles.load_filled_profile("rdp", {"username": "alice"}).username == "alice"
+    config = profiles.load_filled_profile("vnc", {"host": "::1", "password": "secret-needle"})
+    assert isinstance(config, VncConfig)
+    assert (config.host, config.port, config.shared) == ("::1", 5900, True)
+
+
+@pytest.mark.parametrize("values", [
+    {"host": None}, {"username": None}, {"host": ""}, {"username": ""},
+])
+def test_explicit_null_or_empty_template_fields_remain_invalid(config_file, values):
+    save(config_file, rdp(**values, fillByAgent=list(values)), enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="Invalid Profiles"):
+        list_profiles()
+
+
+@pytest.mark.parametrize("backend", ["rdp", "vnc"])
+def test_direct_agent_settings_use_no_environment_defaults_or_persistent_changes(config_file, monkeypatch, backend):
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_PASSWORD", "unrelated-rdp-secret")
+    monkeypatch.setenv("REMOTE_COMPUTER_VNC_PASSWORD", "unrelated-vnc-secret")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_PORT", "3399")
+    monkeypatch.setenv("UV_CACHE_DIR", "unchanged-cache")
+    monkeypatch.setenv("CUSTOM_SECRET", "saved-profile-secret")
+    save(config_file, rdp(passwdenv="CUSTOM_SECRET"), enableProfileFromAgent=True)
+    original = config_file.read_bytes()
+    environment = dict(os.environ)
+    data = {"type": backend, "host": "[::1]"}
+    if backend == "rdp":
+        data["username"] = "alice"
+    config = profiles.load_agent_profile(data)
+    assert config.password == ""
+    assert config.host == "::1"
+    assert config.port == (3389 if backend == "rdp" else 5900)
+    assert config.secret_env_names == ("CUSTOM_SECRET",)
+    assert config_file.read_bytes() == original
+    assert dict(os.environ) == environment
+    save(config_file)
+    with pytest.raises(ProfilesError, match="disabled"):
+        profiles.load_agent_profile(data)
+
+
+@pytest.mark.parametrize("extra", [
+    {"name": "other"}, {"passwdenv": "OTHER_SECRET"}, {"fillByAgent": ["host"]},
+    {"host": "127.0.0.1@evil.example"}, {"host": None}, {"port": 0}, {"port": True},
+    {"unknown": "secret-needle"}, {"shared": False},
+])
+def test_direct_agent_settings_reject_invalid_or_profile_only_fields(config_file, extra):
+    save(config_file, enableProfileFromAgent=True)
+    with pytest.raises(ProfilesError) as caught:
+        profiles.load_agent_profile({"type": "vnc", "host": "localhost", "password": "secret-needle", **extra})
+    assert "secret-needle" not in str(caught.value)
+
+
+async def test_agent_tools_only_register_when_enabled_and_recheck_revocation(config_file, monkeypatch):
+    from mcp.server.mcpserver import MCPServer
+
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    for fill, direct in ((False, False), (True, False), (False, True), (True, True)):
+        save(config_file, rdp(fillByAgent=["password"]),
+             enableDeclareAsFillByAgent=fill, enableProfileFromAgent=direct)
+        server = MCPServer("test-agent-features")
+        mcp_server.register_agent_tools(server)
+        tools = {tool.name: tool for tool in await server.list_tools()}
+        assert ("computer_connect_filled_profile" in tools) is fill
+        assert ("computer_connect_from_agent" in tools) is direct
+        if direct:
+            schema = tools["computer_connect_from_agent"].input_schema
+            assert "password" in schema["properties"]
+            assert "passwdenv" not in schema["properties"]
+            await server.call_tool("computer_connect_from_agent", {
+                "backend": "rdp", "host": "localhost", "username": "alice", "password": "direct-secret", "name": "direct",
+            })
+            config, name = connect.await_args.args
+            assert (config.host, config.password, name) == ("localhost", "direct-secret", "direct")
+        if fill:
+            await server.call_tool("computer_connect_filled_profile", {
+                "profile": "vm-dev", "fields": {"password": "filled-secret"}, "name": "filled",
+            })
+            config, name = connect.await_args.args
+            assert (config.host, config.password, name) == ("192.0.2.10", "filled-secret", "filled")
+        calls = connect.await_count
+        save(config_file, rdp(fillByAgent=["password"]))
+        if direct:
+            with pytest.raises(Exception, match="disabled"):
+                await server.call_tool("computer_connect_from_agent", {"backend": "vnc", "host": "localhost"})
+        if fill:
+            with pytest.raises(Exception, match="disabled"):
+                await server.call_tool("computer_connect_filled_profile", {
+                    "profile": "vm-dev", "fields": {"password": "secret-needle"},
+                })
+        assert connect.await_count == calls
+
+
+@pytest.mark.parametrize("mode", ["filled", "direct"])
+async def test_agent_connection_backend_errors_redact_credentials(config_file, monkeypatch, mode):
+    from urllib.parse import quote
+
+    password = "secret@needle/测试"
+    encoded = quote(password, safe="")
+    save(config_file, rdp(fillByAgent=["password"]),
+         enableDeclareAsFillByAgent=True, enableProfileFromAgent=True)
+    monkeypatch.setattr(mcp_server.sessions, "connect", AsyncMock(side_effect=RuntimeError(f"failed {password} / {encoded}")))
+    with pytest.raises(Exception, match="redacted") as caught:
+        if mode == "filled":
+            await mcp_server.computer_connect_filled_profile("vm-dev", {"password": password})
+        else:
+            await mcp_server.computer_connect_from_agent("rdp", "localhost", username="alice", password=password)
+    assert password not in str(caught.value)
+    assert encoded not in str(caught.value)
+
+
+async def test_invalid_configuration_does_not_register_agent_tools(config_file):
+    config_file.write_text('{"enableProfileFromAgent": true, "password": "secret-needle",', encoding="utf-8")
+    server = mcp_server.RemoteComputerMCPServer("invalid-agent-config")
+    mcp_server.register_agent_tools(server)
+    assert await server.list_tools() == []
+
+
+@pytest.mark.parametrize("value", [0, True, 65536, "3389"])
+def test_filled_numeric_fields_keep_strict_validation(config_file, value):
+    save(config_file, rdp(fillByAgent=["port"]), enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="Invalid Agent"):
+        profiles.load_filled_profile("vm-dev", {"port": value})
