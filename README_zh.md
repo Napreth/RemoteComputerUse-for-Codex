@@ -6,7 +6,7 @@
 
 ## 安装
 
-安装 Codex、Python 3.12 和 `uv`，确保 `uv` 在 `PATH` 中。在[代码仓库](https://github.com/Napreth/RemoteComputerUse-for-Codex)点击 **Code → Download ZIP** 下载代码。进入 Codex 客户端，点击侧边栏的 **Customize**，进入 **Plugins → 添加 → 上传插件压缩包**，选择下载的 ZIP，无需解压。从设置页进入 Plugins 可能没有上传选项。
+安装 Codex、Python 3.12 和 `uv`，确保 `uv` 在 `PATH` 中。从 [Releases 页面](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases)的 **Assets** 下载 `remote-computer-use-1.0.0.zip`。进入 Codex 客户端，点击侧边栏的 **Customize**，进入 **Plugins → 添加 → 上传插件压缩包**，选择下载的 ZIP，无需解压。从设置页进入 Plugins 可能没有上传选项。
 
 Codex 通过 `uv` 和项目锁文件启动内置的 `remote_computer` MCP 服务。首次启动可能联网安装依赖；当前启动兼容性记录见[发布兼容性](docs/release-compatibility.md)。
 

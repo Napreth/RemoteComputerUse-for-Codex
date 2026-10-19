@@ -6,7 +6,7 @@ A Codex plugin based on OpenAI's Computer Use sample. It replaces local desktop 
 
 ## Install
 
-Install Codex, Python 3.12 and `uv`, with `uv` on `PATH`. Download the [repository](https://github.com/Napreth/RemoteComputerUse-for-Codex) using **Code → Download ZIP**. In Codex, open **Customize** from the sidebar, select **Plugins → Add → Upload plugin ZIP**, and choose the archive without extracting it. The Plugins page reached through Settings may not show the upload option.
+Install Codex, Python 3.12 and `uv`, with `uv` on `PATH`. Download `remote-computer-use-1.0.0.zip` from **Assets** on the [Releases page](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases). In Codex, open **Customize** from the sidebar, select **Plugins → Add → Upload plugin ZIP**, and choose the archive without extracting it. The Plugins page reached through Settings may not show the upload option.
 
 Codex starts the bundled `remote_computer` MCP server using `uv` and the project's lockfile. The first start may download dependencies; current startup compatibility results are tracked in [release compatibility](docs/release-compatibility.md).
 
