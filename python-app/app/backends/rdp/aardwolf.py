@@ -38,6 +38,13 @@ class _Utf16CodeUnit:
         return self.value.to_bytes(2, "little")
 
 
+class _OutputSink:
+    """Discard unused notifications after aardwolf updates its desktop buffer."""
+
+    async def put(self, item: Any) -> None:
+        pass
+
+
 def connection_url(config: RdpConfig) -> str:
     if type(config.port) is not int or not MIN_PORT <= config.port <= MAX_PORT:
         raise ValueError(f"RDP port must be an integer between {MIN_PORT} and {MAX_PORT}")
@@ -93,6 +100,12 @@ class AardwolfAdapter:
         factory = RDPConnectionFactory.from_url(connection_url(config), settings)
         factory.target.unsafe_ssl = config.insecure_tls
         connection = factory.get_connection(settings)
+        # aardwolf 0.2.13 queues every decoded bitmap (including its PIL image)
+        # after compositing it into the desktop buffer used by screenshot_png.
+        # We do not consume video/clipboard notifications. Discard them before
+        # connect starts receiving frames, rather than retaining an unbounded
+        # history or blocking the receiver on a bounded, unconsumed queue.
+        connection.ext_out_queue = _OutputSink()
         connect_task = asyncio.create_task(connection.connect())
         try:
             connected, error = await asyncio.wait_for(asyncio.shield(connect_task), config.connect_timeout)

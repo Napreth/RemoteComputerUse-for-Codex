@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import ipaddress
 import threading
+import weakref
 from types import SimpleNamespace
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock
@@ -482,6 +484,111 @@ async def test_rdp_scroll_uses_valid_signed_wheel_frame(delta: int, steps: int) 
     await backend.scroll(10, 20, 0, delta)
 
     connection.send_mouse.assert_awaited_once_with(wheel_up, 10, 20, False, steps)
+
+
+@pytest.fixture
+def rdp_frame_stream(monkeypatch: pytest.MonkeyPatch):
+    from aardwolf.commons.queuedata.video import RDP_VIDEO
+    from aardwolf.connection import RDPConnection
+    from aardwolf.protocol.fastpath import FASTPATH_FRAGMENT, FASTPATH_UPDATETYPE
+    from aardwolf.protocol.fastpath.bitmap import TS_BITMAP_DATA, TS_BITMAP_FLAG
+    from PIL import Image
+
+    updates = weakref.WeakValueDictionary()
+    images = weakref.WeakValueDictionary()
+    decode = RDP_VIDEO.from_bitmapdata
+
+    def tracked_decode(*args):
+        update, image = decode(*args)
+        updates[id(update)] = update
+        images[id(image)] = image
+        return update, image
+
+    async def render(connection, color, x=0, y=0):
+        bitmap = TS_BITMAP_DATA()
+        bitmap.destLeft, bitmap.destTop = x, y
+        bitmap.width = bitmap.height = 32
+        bitmap.destRight, bitmap.destBottom = x + 31, y + 31
+        bitmap.bitsPerPixel, bitmap.flags = 32, TS_BITMAP_FLAG(0)
+        bitmap.bitmapDataStream = bytes((*color, 255)) * (32 * 32)
+        pdu = SimpleNamespace(fpOutputUpdates=SimpleNamespace(
+            fragmentation=FASTPATH_FRAGMENT.SINGLE,
+            updateCode=FASTPATH_UPDATETYPE.BITMAP,
+            update=SimpleNamespace(rectangles=[bitmap]),
+        ))
+        # Run the pinned library's actual decoding, compositing and queue write.
+        await connection._RDPConnection__process_fastpath(pdu)
+
+    stream = SimpleNamespace(
+        connections=[], outcome="success", updates=updates, images=images, render=render,
+    )
+
+    async def connect(connection):
+        stream.connections.append(connection)
+        connection._RDPConnection__desktop_buffer = Image.new("RGBA", (64, 48))
+        connection._RDPConnection__joined_channels = {}
+        # Frames can arrive during the handshake, before the adapter is published.
+        await render(connection, (20, 40, 60))
+        if stream.outcome == "failure":
+            raise RuntimeError("handshake failed after receiving a frame")
+        if stream.outcome == "cancelled":
+            raise asyncio.CancelledError()
+        if stream.outcome == "timeout":
+            await asyncio.Event().wait()
+        return True, None
+
+    monkeypatch.setattr(RDP_VIDEO, "from_bitmapdata", staticmethod(tracked_decode))
+    # Only the network handshake is replaced; use the real factory, decoder,
+    # framebuffer, PNG encoder and connection termination code.
+    monkeypatch.setattr(RDPConnection, "connect", connect)
+    monkeypatch.setattr(RDPConnection, "send_disconnect", AsyncMock(return_value=(True, None)))
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_rdp_frame_updates_are_not_retained_and_screenshots_stay_current(rdp_frame_stream):
+    from PIL import Image
+
+    adapter = AardwolfAdapter()
+    await adapter.connect(RdpConfig(host="target", port=3389, username="user", width=64, height=48))
+    connection = rdp_frame_stream.connections[0]
+    try:
+        assert not rdp_frame_stream.updates
+        assert not rdp_frame_stream.images
+        # Feed bursts without sleeping or taking screenshots. Discarding output
+        # must neither retain the burst nor block the library's receive path.
+        for batch in range(20):
+            for index in range(100):
+                await rdp_frame_stream.render(connection, (batch, index, 120), 32, 16)
+            assert not rdp_frame_stream.updates
+            assert not rdp_frame_stream.images
+        with Image.open(io.BytesIO(await adapter.screenshot_png())) as screenshot:
+            assert screenshot.size == (64, 48)
+            assert screenshot.getpixel((0, 0))[:3] == (20, 40, 60)
+            assert screenshot.getpixel((63, 47))[:3] == (19, 99, 120)
+    finally:
+        # The real terminate() writes its None sentinel to the same output.
+        await asyncio.wait_for(adapter.disconnect(), timeout=1)
+    assert connection.disconnected_evt.is_set()
+    assert not rdp_frame_stream.updates
+    assert not rdp_frame_stream.images
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "error"),
+    [("failure", RuntimeError), ("cancelled", asyncio.CancelledError), ("timeout", TimeoutError)],
+)
+async def test_rdp_frames_received_during_failed_startup_are_not_retained(rdp_frame_stream, outcome, error):
+    rdp_frame_stream.outcome = outcome
+    adapter = AardwolfAdapter()
+    timeout = 0.1 if outcome == "timeout" else 2.0
+    with pytest.raises(error):
+        await adapter.connect(RdpConfig(host="target", port=3389, username="user", connect_timeout=timeout))
+    assert not adapter.connected
+    assert rdp_frame_stream.connections[0].disconnected_evt.is_set()
+    assert not rdp_frame_stream.updates
+    assert not rdp_frame_stream.images
 
 
 @pytest.mark.asyncio
