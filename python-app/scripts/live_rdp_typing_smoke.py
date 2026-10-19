@@ -73,7 +73,7 @@ def guest_request(config: RdpConfig, vm_name: str, action: str, path: str = "") 
     return json.loads(result.stdout)
 
 
-async def main(vm_name: str, profile: str | None) -> None:
+async def main(vm_name: str, profile: str | None, *, initial_only: bool = False) -> None:
     if os.name != "nt":
         raise RuntimeError("This opt-in smoke requires a Windows Hyper-V host")
     config = load_profile(profile) if profile is not None else load_backend_config()
@@ -87,9 +87,13 @@ async def main(vm_name: str, profile: str | None) -> None:
     output = Path(__file__).resolve().parents[2] / "test-artifacts"
     output.mkdir(exist_ok=True)
     line = "RDP-0123456789 ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 你好世界 中文输入 😀"
-    cases = [(f"default-{index}", line + "\n" + line, 0.0, False) for index in range(1, 4)]
-    cases += [("explicit-interval", "Caller interval: 中文😀\nsecond line", 0.02, False),
-              ("atomic", "Atomic: hello\t你好😀\nsecond line", 0.0, True)]
+    # Exercise the first non-ASCII input before the long ASCII prefix can warm
+    # up Notepad. Use --initial-only once per restored guest for cold runs.
+    cases = [("initial-unicode", "你好世界 😀\nFirst Unicode input", 0.0, False)]
+    if not initial_only:
+        cases += [(f"default-{index}", line + "\n" + line, 0.0, False) for index in range(1, 4)]
+        cases += [("explicit-interval", "Caller interval: 中文😀\nsecond line", 0.02, False),
+                  ("atomic", "Atomic: hello\t你好😀\nsecond line", 0.0, True)]
     report: dict[str, Any] = {"notepad_version": guest["result"], "cases": [], "passed": False}
     runtime = None
     verified = False
@@ -115,6 +119,11 @@ async def main(vm_name: str, profile: str | None) -> None:
             matched = actual == text
             report["cases"].append({"name": name, "matched": matched,
                                     "expected_characters": len(text), "actual_characters": len(actual)})
+            if not matched:
+                report["cases"][-1]["mismatch_at"] = next(
+                    (offset for offset, (expected, received) in enumerate(zip(text, actual)) if expected != received),
+                    min(len(text), len(actual)),
+                )
             print(json.dumps(report["cases"][-1]), flush=True)
             if not matched:
                 raise AssertionError(f"{name}: saved guest text differs from the complete input")
@@ -123,7 +132,15 @@ async def main(vm_name: str, profile: str | None) -> None:
     finally:
         try:
             if runtime is not None:
-                await runtime.close()
+                try:
+                    if not verified:
+                        try:
+                            (output / "rdp-notepad-typing.png").write_bytes(await runtime.capture_screenshot())
+                        except (OSError, RuntimeError, ValueError) as error:
+                            report["screenshot_error"] = type(error).__name__
+                finally:
+                    # A cancelled diagnostic must not bypass worker cleanup.
+                    await runtime.close()
             report["passed"] = verified
         finally:
             (output / "rdp-notepad-typing.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -133,5 +150,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--vm-name", required=True, help="Disposable Hyper-V guest to verify and read back")
     parser.add_argument("--profile", help="Saved RDP profile; otherwise use REMOTE_COMPUTER_* settings")
+    parser.add_argument("--initial-only", action="store_true", help="Only test Chinese-first input on a cold guest")
     args = parser.parse_args()
-    asyncio.run(main(args.vm_name, args.profile))
+    asyncio.run(main(args.vm_name, args.profile, initial_only=args.initial_only))

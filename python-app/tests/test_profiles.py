@@ -199,6 +199,14 @@ def test_windows_profile_path_and_native_fallback(tmp_path: Path, monkeypatch: p
     assert profiles.profiles_path() == expected
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows Known Folder API")
+def test_windows_native_lookup_without_forwarded_localappdata(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    root = profiles._windows_local_app_data()
+    assert root.is_absolute()
+    assert profiles.profiles_path() == root / "remote-computer-use" / "config.json"
+
+
 def test_linux_profile_path_uses_explicit_xdg_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(profiles.sys, "platform", "linux")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))

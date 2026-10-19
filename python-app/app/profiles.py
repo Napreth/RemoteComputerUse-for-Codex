@@ -34,6 +34,8 @@ class ProfilesError(ValueError):
 
 
 def _windows_local_app_data() -> Path:
+    if sys.platform != "win32":
+        raise ProfilesError("Windows LocalAppData lookup is only available on Windows.")
     # Codex may omit LOCALAPPDATA from the MCP environment. Query the current
     # user's Windows folder instead of requiring another forwarded variable.
     from ctypes import wintypes

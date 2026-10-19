@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -49,8 +50,13 @@ def test_smoke_exercises_current_facade_through_terminal_marker(backend):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "runtime", "cleanup"])
-async def test_notepad_smoke_requires_full_execution_and_successful_cleanup(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize(
+    "failure", [None, "runtime", "cleanup", "first-character", "screenshot-error", "screenshot-cancel"],
+)
+@pytest.mark.parametrize("initial_only", [False, True])
+async def test_notepad_smoke_requires_full_execution_and_successful_cleanup(
+    tmp_path, monkeypatch, failure, initial_only,
+):
     from app.backends.config import RdpConfig
     from scripts import live_rdp_typing_smoke as smoke
     monkeypatch.setattr(time, "sleep", lambda duration: None)
@@ -74,18 +80,23 @@ async def test_notepad_smoke_requires_full_execution_and_successful_cleanup(tmp_
         exec(code, {  # noqa: S102 - trusted smoke snippet, no real guest or host input
             "computer": computer, "log": lambda value: output.append({"type": "input_text", "text": value}),
         })
-        if failure == "runtime":
+        if failure in {"runtime", "screenshot-error", "screenshot-cancel"}:
             output.append({"type": "input_text", "text": "Traceback: failed after early marker"})
         return {"output": output}
 
     def guest_request(config, vm_name, action, path=""):
-        value = base64.b64encode(computer.text.encode()).decode() if action == "read" else "test-version"
+        text = computer.text[1:] if failure == "first-character" else computer.text
+        value = base64.b64encode(text.encode()).decode() if action == "read" else "test-version"
         return {"result": value, "addresses": ["127.0.0.1"]}
 
     runtime = SimpleNamespace(
         execute=execute, capture_screenshot=AsyncMock(return_value=b"test-frame"),
         close=AsyncMock(side_effect=RuntimeError("release failed") if failure == "cleanup" else None),
     )
+    if failure == "screenshot-error":
+        runtime.capture_screenshot.side_effect = OSError("frame unavailable")
+    elif failure == "screenshot-cancel":
+        runtime.capture_screenshot.side_effect = asyncio.CancelledError()
     monkeypatch.setattr(smoke, "os", SimpleNamespace(name="nt"))
     monkeypatch.setattr(smoke, "__file__", str(tmp_path / "python-app/scripts/typing.py"))
     monkeypatch.setattr(smoke, "load_profile", lambda name: RdpConfig(host="127.0.0.1", port=3389, username="test"))
@@ -96,10 +107,23 @@ async def test_notepad_smoke_requires_full_execution_and_successful_cleanup(tmp_
         SOCK_STREAM=1, getaddrinfo=lambda *args, **kwargs: [(None, None, None, None, ("127.0.0.1", 3389))],
     ))
     if failure:
-        with pytest.raises(RuntimeError, match="did not complete|release failed"):
-            await smoke.main("disposable-vm", "test-profile")
+        if failure == "screenshot-cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await smoke.main("disposable-vm", "test-profile", initial_only=initial_only)
+        else:
+            error_type = AssertionError if failure == "first-character" else RuntimeError
+            with pytest.raises(error_type, match="did not complete|release failed|saved guest text differs"):
+                await smoke.main("disposable-vm", "test-profile", initial_only=initial_only)
     else:
-        await smoke.main("disposable-vm", "test-profile")
+        await smoke.main("disposable-vm", "test-profile", initial_only=initial_only)
     report = json.loads((tmp_path / "test-artifacts/rdp-notepad-typing.json").read_text())
     assert report["passed"] is (failure is None)
+    if failure not in {"runtime", "screenshot-error", "screenshot-cancel"}:
+        assert report["cases"][0]["name"] == "initial-unicode"
+    if failure == "first-character":
+        assert report["cases"][0]["mismatch_at"] == 0
+    if failure is None:
+        assert len(report["cases"]) == (1 if initial_only else 6)
+    if failure == "screenshot-error":
+        assert report["screenshot_error"] == "OSError"
     runtime.close.assert_awaited_once()

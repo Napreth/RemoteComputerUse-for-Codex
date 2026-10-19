@@ -46,3 +46,33 @@ jobs:
         run: pnpm check
       - name: Check managed Python launcher
         run: node --test scripts/launch.test.mjs
+
+  windows-plugin:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      OPENAI_API_KEY: ''
+      CUA_LIVE_TESTS: '0'
+      REMOTE_COMPUTER_FRESH_INSTALL_TEST: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        with:
+          version: '0.11.33'
+      - name: Install locked remote Python runtime
+        run: uv sync --project python-app --frozen
+      - name: Check packaged MCP and Windows native dependencies
+        run: >-
+          uv run --project python-app pytest -q -p no:cacheprovider
+          python-app/tests/test_mcp_server.py
+          python-app/tests/test_profiles.py
+          python-app/tests/test_remote_backends.py
+          python-app/tests/test_remote_worker.py
+          python-app/tests/test_runtime_smoke.py
+          python-app/tests/test_plugin_package.py
+          --basetemp "${{ runner.temp }}/rcu-tests"
