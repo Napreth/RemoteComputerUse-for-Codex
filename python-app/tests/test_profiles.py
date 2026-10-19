@@ -296,7 +296,7 @@ def test_agent_feature_switches_require_real_booleans(config_file, switch, value
 
 
 @pytest.mark.parametrize("declared", [
-    ["name"], ["passwdenv"], ["fillByAgent"], ["unknown"], ["host", "host"], [1], "host",
+    ["name"], ["type"], ["passwdenv"], ["fillByAgent"], ["unknown"], ["host", "host"], [1], "host",
 ])
 def test_invalid_agent_field_declarations_are_rejected(config_file, declared):
     save(config_file, rdp(fillByAgent=declared), enableDeclareAsFillByAgent=True)
@@ -334,7 +334,9 @@ def test_agent_fill_template_and_snapshot_do_not_persist_values(config_file, mon
     {"host": "localhost", "password": "secret-needle", "fillByAgent": ["username"]},
 ])
 def test_agent_fill_cannot_change_undeclared_fields_or_omit_declared_fields(config_file, fields):
-    save(config_file, rdp(fillByAgent=["host", "password"]), enableDeclareAsFillByAgent=True)
+    template = rdp(fillByAgent=["host", "password"])
+    del template["host"]
+    save(config_file, template, enableDeclareAsFillByAgent=True)
     before = config_file.read_bytes()
     with pytest.raises(ProfilesError, match="exactly") as caught:
         profiles.load_filled_profile("vm-dev", fields)
@@ -344,7 +346,9 @@ def test_agent_fill_cannot_change_undeclared_fields_or_omit_declared_fields(conf
 
 @pytest.mark.parametrize("host", [None, "", "127.0.0.1@evil.example", "host?serverip=evil"])
 def test_agent_fill_still_validates_host_without_echoing_credentials(config_file, host):
-    save(config_file, rdp(fillByAgent=["host", "password"]), enableDeclareAsFillByAgent=True)
+    template = rdp(fillByAgent=["host", "password"])
+    del template["host"]
+    save(config_file, template, enableDeclareAsFillByAgent=True)
     with pytest.raises(ProfilesError, match="Invalid Agent") as caught:
         profiles.load_filled_profile("vm-dev", {"host": host, "password": "secret-needle"})
     assert "secret-needle" not in str(caught.value)
@@ -487,3 +491,44 @@ def test_filled_numeric_fields_keep_strict_validation(config_file, value):
     save(config_file, rdp(fillByAgent=["port"]), enableDeclareAsFillByAgent=True)
     with pytest.raises(ProfilesError, match="Invalid Agent"):
         profiles.load_filled_profile("vm-dev", {"port": value})
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(("backend", "field", "value"), [
+    ("rdp", "host", "localhost"), ("rdp", "username", "alice"), ("rdp", "password", ""),
+    ("rdp", "port", 3389), ("rdp", "domain", ""), ("rdp", "width", 1440), ("rdp", "height", 900),
+    ("rdp", "insecure_tls", False), ("vnc", "shared", True),
+])
+def test_fill_by_agent_fields_cannot_also_be_present_in_saved_profile(config_file, enabled, backend, field, value):
+    item = {"name": "template", "type": backend, "host": "localhost", "fillByAgent": [field], field: value}
+    if backend == "rdp":
+        item["username"] = "alice"
+    save(config_file, item, enableDeclareAsFillByAgent=enabled)
+    original = config_file.read_bytes()
+    with pytest.raises(ProfilesError, match="fillByAgent fields are absent"):
+        list_profiles()
+    assert config_file.read_bytes() == original
+
+
+def test_agent_filling_works_when_declared_fields_have_only_implicit_defaults(config_file):
+    save(config_file, {"name": "vnc", "type": "vnc", "fillByAgent": ["host", "password", "port", "shared"]},
+         enableDeclareAsFillByAgent=True)
+    config = profiles.load_filled_profile("vnc", {
+        "host": "localhost", "password": "secret-needle", "port": 5999, "shared": True,
+    })
+    assert (config.host, config.password, config.port, config.shared) == ("localhost", "secret-needle", 5999, True)
+
+
+@pytest.mark.parametrize("declared", [[], ["type"], ["host"]])
+def test_missing_profile_type_is_rejected(config_file, declared):
+    save(config_file, {"name": "template", "host": "localhost", "fillByAgent": declared},
+         enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="Invalid Profiles"):
+        list_profiles()
+
+
+def test_agent_cannot_change_a_saved_profile_backend(config_file):
+    save(config_file, rdp(fillByAgent=["password"]), enableDeclareAsFillByAgent=True)
+    with pytest.raises(ProfilesError, match="type.*cannot be filled"):
+        profiles.load_filled_profile("vm-dev", {"type": "vnc", "password": "secret-needle"})
+    assert profiles.load_filled_profile("vm-dev", {"password": "secret-needle"}).kind == "rdp"

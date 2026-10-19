@@ -34,7 +34,7 @@ Use unique profile names and either `password` or `passwdenv`. The latter names 
 
 Profiles are reread for each connection; edits do not change existing sessions. Existing `REMOTE_COMPUTER_*` connections remain supported without `profile`. The runtime does not load `.env` or set `UV_*` defaults. See [configuration reference](docs/configuration.md) for optional fields, environment variables and Labs setup.
 
-Agent-supplied settings are optional and disabled by default. Set `enableDeclareAsFillByAgent: true` at the top level to let Agent fill a profile's declared fields, such as `fillByAgent: ["host", "password"]`; set `enableProfileFromAgent: true` to expose a direct connection tool. Values apply only to that connection and are never saved. See [Agent-supplied connection fields](docs/configuration.md#agent-supplied-connection-fields) for examples.
+Agent-supplied settings are optional and disabled by default. Set `enableDeclareAsFillByAgent: true` at the top level to let Agent fill a profile's declared fields, such as `fillByAgent: ["host", "password"]`; those fields must be absent from the profile. `name`, `type` and `passwdenv` cannot be filled. Set `enableProfileFromAgent: true` to expose a direct connection tool. Values apply only to that connection and are never saved. See [Agent-supplied connection fields](docs/configuration.md#agent-supplied-connection-fields) for examples.
 
 ## Use
 

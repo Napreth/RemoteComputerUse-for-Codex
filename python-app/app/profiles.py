@@ -37,7 +37,7 @@ from .backends.config import (
 CONFIG_DIRECTORY = "remote-computer-use"
 MAX_CONFIG_BYTES = 1024 * 1024
 type FillField = Literal[
-    "type", "host", "port", "username", "password", "domain", "width", "height", "insecure_tls", "shared",
+    "host", "port", "username", "password", "domain", "width", "height", "insecure_tls", "shared",
 ]
 
 
@@ -82,7 +82,7 @@ class _Profile(BaseModel):
     host: str | None = Field(default=None, min_length=1, max_length=1024)
     password: SecretStr = Field(default_factory=lambda: SecretStr(""), repr=False)
     passwdenv: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$", repr=False)
-    fillByAgent: list[FillField] = Field(default_factory=list, max_length=10)
+    fillByAgent: list[FillField] = Field(default_factory=list, max_length=9)
 
     @field_validator("name", "host")
     @classmethod
@@ -104,7 +104,7 @@ class _Profile(BaseModel):
             raise ValueError("password and passwdenv are mutually exclusive")
         if self.passwdenv is not None and "password" in self.fillByAgent:
             raise ValueError("Agent password filling cannot be combined with passwdenv")
-        allowed = type(self).model_fields.keys() - {"name", "passwdenv", "fillByAgent"}
+        allowed = type(self).model_fields.keys() - {"name", "type", "passwdenv", "fillByAgent"}
         if len(set(self.fillByAgent)) != len(self.fillByAgent) or set(self.fillByAgent) - allowed:
             raise ValueError("fillByAgent must contain unique connection fields supported by this profile type")
         if self.host is None and "host" not in self.fillByAgent:
@@ -166,9 +166,11 @@ class _Profiles(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def unique_names(self) -> Self:
+    def valid_profiles(self) -> Self:
         if len({profile.name for profile in self.profiles}) != len(self.profiles):
             raise ValueError("Profile names must be unique")
+        if any(set(profile.fillByAgent) & profile.model_fields_set for profile in self.profiles):
+            raise ValueError("Fields declared in fillByAgent must be absent from the saved profile")
         return self
 
 
@@ -199,7 +201,8 @@ def _read_profiles(*, missing_ok: bool = False) -> _Profiles:
         # Never echo JSON, validation inputs, or parser excerpts: they may contain
         # plaintext passwords, including in malformed fields.
         raise ProfilesError(
-            "Invalid Profiles config.json; check version 1, field types, unique names, and password/passwdenv."
+            "Invalid Profiles config.json; check version 1, field types, unique names, password/passwdenv, "
+            "and that fillByAgent fields are absent from the profile."
         ) from None
 
 
@@ -248,8 +251,13 @@ def load_filled_profile(name: str, fields: dict[str, Any]) -> BackendConfig:
         raise ProfilesError("Agent profile filling is disabled; enableDeclareAsFillByAgent must be true in config.json.")
     selected = _select_profile(document, name)
     if not selected.fillByAgent or set(fields) != set(selected.fillByAgent):
-        raise ProfilesError("Supply exactly the profile's fillByAgent fields; name and passwdenv cannot be filled.")
+        raise ProfilesError(
+            "Supply exactly the profile's fillByAgent fields; name, type and passwdenv cannot be filled."
+        )
     values = selected.model_dump(exclude_unset=True)
+    # Declarations describe the saved template, not the completed connection.
+    # Remove them before validating all required fields of the profile's backend.
+    values.pop("fillByAgent", None)
     values.update(fields)
     return _backend_config(_validate_agent_profile(values), document)
 

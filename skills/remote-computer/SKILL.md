@@ -19,8 +19,9 @@ the raw file with model code or create credential files on the user's behalf.
    Do not combine a profile with host/backend/username/port overrides.
    If discovery returns `fillByAgent`, use the available
    `computer_connect_filled_profile(profile="...", fields={...}, name="...")`
-   with exactly those fields. Use only user-provided values; do not guess
-   credentials or change undeclared fields. `name` and `passwdenv` cannot be
+   with exactly those fields. Declared fields must be absent from the saved
+   template. Use only user-provided values; do not guess
+   credentials or change undeclared fields. `name`, `type` and `passwdenv` cannot be
    filled. When `computer_connect_from_agent` is available, the user has enabled
    direct settings: use it for a user-specified RDP/VNC target and credentials.
    Both paths apply only to that connection and never save a profile. Do not

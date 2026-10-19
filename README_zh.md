@@ -34,7 +34,7 @@ Profile 名不能重复，`password` 与 `passwdenv` 二选一；后者引用 MC
 
 每次连接重新读取配置，修改不影响已有会话。原有 `REMOTE_COMPUTER_*` 环境配置仍可在不指定 `profile` 时使用。运行时不加载 `.env`，也不设置 `UV_*` 默认值。可选字段、环境变量和 Labs 设置见[配置参考](docs/configuration.md)。
 
-AI 填写功能默认关闭。在配置顶层设置 `enableDeclareAsFillByAgent: true`，可让 AI 填写 Profile 的 `fillByAgent: ["host", "password"]` 等声明字段；设置 `enableProfileFromAgent: true`，可开放直接提供连接参数的工具。填写值仅用于当次连接，不写回文件。示例见[AI 填写配置](docs/configuration.md#agent-supplied-connection-fields)。
+AI 填写功能默认关闭。在配置顶层设置 `enableDeclareAsFillByAgent: true`，可让 AI 填写 `fillByAgent: ["host", "password"]` 等声明字段，这些字段必须从 Profile 中省略；`name`、`type` 和 `passwdenv` 不允许填写。设置 `enableProfileFromAgent: true`，可开放直接提供连接参数的工具。填写值仅用于当次连接，不写回文件。示例见[AI 填写配置](docs/configuration.md#agent-supplied-connection-fields)。
 
 ## 使用
 

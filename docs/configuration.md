@@ -29,7 +29,7 @@ Two independent top-level switches in `config.json` default to `false`:
 
 Restart the MCP server after changing a switch to refresh tool discovery. Each connection call also re-reads the file: disabling a switch immediately prevents new calls through that tool, even if the client has cached its schema. Missing or invalid configuration never enables these tools and does not prevent MCP initialization.
 
-For a saved template, declare the fields Agent may supply with `fillByAgent`. `host` and RDP `username` may be omitted from the file only when declared. Supply every declared field on each connection; undeclared fields are rejected. The values are validated together with the saved fields and used only for that connection. The server never writes them back to `config.json` or changes process environment variables.
+For a saved template, declare the fields Agent may supply with `fillByAgent`. Every declared field must be absent from the saved profile, even if its saved value would be empty, null, false or a default. Required fields such as `host` and RDP `username` may be omitted only when declared. Supply every declared field on each connection; undeclared fields are rejected. The values are validated together with the saved fields and used only for that connection. The server never writes them back to `config.json` or changes process environment variables.
 
 ```json
 {
@@ -48,7 +48,7 @@ With declaration filling enabled, `computer_list_profiles()` returns `fillByAgen
 computer_connect_filled_profile(profile="vm-dev", fields={"host": "192.0.2.10", "password": "<user-provided password>"}, name="work")
 ```
 
-Declarations may include only connection fields supported by that profile: `type`, `host`, `port`, `password`, RDP `username`/`domain`/`width`/`height`/`insecure_tls`, or VNC `shared`. `name`, `passwdenv` and `fillByAgent` itself are forbidden. A template declaring `password` cannot also use `passwdenv`. Changing `type` still requires a valid complete profile for the resulting backend; incompatible saved fields are rejected. When the switch is off, declarations are not exposed and ordinary connections require complete saved settings.
+Declarations may include only connection fields supported by that profile: `host`, `port`, `password`, RDP `username`/`domain`/`width`/`height`/`insecure_tls`, or VNC `shared`. `name`, `type`, `passwdenv` and `fillByAgent` itself are forbidden. `type` must remain explicitly set to `rdp` or `vnc` in the saved profile and cannot be changed through filling. A template declaring `password` cannot also use `passwdenv`. When the switch is off, declarations are not exposed and ordinary connections require complete saved settings.
 
 With `enableProfileFromAgent` enabled, Agent may provide all connection settings directly without selecting or saving a profile:
 
