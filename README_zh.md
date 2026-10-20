@@ -72,6 +72,15 @@ VNC 支持 RFB 3.8、Raw 编码及 None/VNC 密码认证，不提供 TLS，请�
 
 `pnpm check` 执行 Python、Console、契约、Labs 和构建检查。`pnpm dev:python` 启动保留的 runner 和 Console，`pnpm start:python` 使用构建后的 Console。旧 JavaScript/Playwright 后端已停用。
 
+发布时先更新 `plugin.json` 的版本号并提交，再推送同版本 tag（可带 `v` 前缀）。GitHub Actions 会等待 Linux 和 Windows 检查全部通过，然后构建插件 ZIP，通过 [softprops/action-gh-release](https://github.com/softprops/action-gh-release) 发布。Release 标题为“{tag 名} - {tag 注释第一行}”。正文使用第一行之后的内容，从第一个非空行开始；后面没有非空行时，正文为空。轻量 tag 没有注释时，标题只使用 tag 名，正文为空。带预发布后缀的语义版本会标记为预发布。版本不匹配或检查失败时不会发布。使用内置 `GITHUB_TOKEN`，无需额外配置 Secret。
+
+```sh
+git tag -a v1.0.0 -m "发布标题" -m "在这里填写本次发布说明"
+git push origin v1.0.0
+```
+
+发布时使用下一个尚未使用的版本号，以上 `v1.0.0` 仅为示例。多段 Markdown 发布说明可先写入文件，再用 `git tag -a <tag> --cleanup=verbatim -F <说明文件>` 保留格式和 `#` 标题。
+
 ## 许可证
 
 [MIT](LICENSE)，Copyright (c) 2026 Napreth。保留了继承的 [OpenAI 许可证](LICENSES/OpenAI-CUA-Sample-App-LICENSE)和[示例 README](docs/upstream/openai-sample-README.md)。

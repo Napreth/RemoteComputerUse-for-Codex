@@ -72,6 +72,15 @@ Build an upload ZIP with `python scripts/package_plugin.py` (Python 3.12+, stand
 
 Run `pnpm check` for Python, Console, contracts, Labs and build checks. `pnpm dev:python` starts the retained runner and Console; `pnpm start:python` uses the built Console. The old JavaScript/Playwright backend is retired.
 
+To publish a release, set `plugin.json`'s version, commit the changes, then push a matching tag (with or without a `v` prefix). GitHub Actions waits for both Linux and Windows checks, builds the plugin ZIP, and publishes it using [softprops/action-gh-release](https://github.com/softprops/action-gh-release). The release title is `<tag name> - <first line of the tag message>`. The description uses the remaining message, starting at the first nonblank line after the first line; if there is none, it is empty. Lightweight tags use only the tag name as the title and have an empty description. Semantic versions with a prerelease suffix are marked as prereleases. A version mismatch or failed check prevents publication. The workflow uses the built-in `GITHUB_TOKEN`; no extra secret is needed.
+
+```sh
+git tag -a v1.0.0 -m "Release title" -m "Describe the changes here"
+git push origin v1.0.0
+```
+
+Use the next unused version when releasing; `v1.0.0` above is only an example. Put multiline Markdown release notes in a file and use `git tag -a <tag> --cleanup=verbatim -F <notes-file>` to preserve their formatting, including `#` headings.
+
 ## License
 
 [MIT](LICENSE), Copyright (c) 2026 Napreth. The inherited [OpenAI license](LICENSES/OpenAI-CUA-Sample-App-LICENSE) and [sample README](docs/upstream/openai-sample-README.md) are retained.

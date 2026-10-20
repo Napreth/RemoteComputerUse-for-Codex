@@ -76,3 +76,75 @@ jobs:
           python-app/tests/test_runtime_smoke.py
           python-app/tests/test_plugin_package.py
           --basetemp "${{ runner.temp }}/rcu-tests"
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !github.event.deleted
+    needs: [check, windows-plugin]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Read release information from the tag
+        id: metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          version = json.loads(Path("plugin.json").read_text(encoding="utf-8"))["version"]
+          if tag.removeprefix("v") != version:
+              raise SystemExit(f"Tag {tag!r} must match plugin.json version {version!r} (optional v prefix)")
+          ref = f"refs/tags/{tag}"
+          kind = subprocess.check_output(["git", "cat-file", "-t", ref], text=True).strip()
+          notes = ""
+          if kind == "tag":
+              notes = subprocess.check_output(
+                  ["git", "for-each-ref", "--format=%(contents)", ref], encoding="utf-8"
+              ).removesuffix("\n")
+          lines = notes.splitlines(keepends=True)
+          first_line = lines[0].rstrip("\r\n") if lines else ""
+          title = f"{tag} - {first_line}" if first_line else tag
+          body_start = next((index for index, line in enumerate(lines[1:], 1) if line.strip()), len(lines))
+          body = "".join(lines[body_start:])
+          Path(os.environ["RUNNER_TEMP"], "release-notes.md").write_text(body, encoding="utf-8")
+          prerelease = "-" in version.split("+", 1)[0]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"title={title}\n")
+              output.write(f"empty_body={str(not body).lower()}\n")
+              output.write(f"prerelease={str(prerelease).lower()}\n")
+          PY
+      - name: Build plugin ZIP
+        run: python scripts/package_plugin.py
+      - name: Publish GitHub Release
+        id: publish
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ steps.metadata.outputs.title }}
+          body_path: ${{ runner.temp }}/release-notes.md
+          prerelease: ${{ steps.metadata.outputs.prerelease == 'true' }}
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+      - name: Clear empty release description
+        if: steps.metadata.outputs.empty_body == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ steps.publish.outputs.id }}
+        # The release action retains an existing body when the new body is empty.
+        run: |
+          printf '%s' '{"body":""}' | gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" --input - --silent
