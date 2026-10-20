@@ -187,7 +187,8 @@ def test_agent_plugin_manifest_uses_root_components() -> None:
     Draft202012Validator(schema).validate(plugin)
     assert plugin["$schema"] == "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
     assert plugin["name"] == "remote-computer-use"
-    assert plugin["version"] == "1.0.0"
+    # Release versions change independently of the pinned Agent Plugins schema.
+    assert plugin["version"].strip()
     assert "interface" in plugin["extensions"]["com.openai"]
     assert (root / "skills" / "remote-computer" / "SKILL.md").is_file()
     assert "mcpServers" not in plugin
