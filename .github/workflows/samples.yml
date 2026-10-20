@@ -115,6 +115,11 @@ jobs:
               notes = subprocess.check_output(
                   ["git", "for-each-ref", "--format=%(contents)", ref], encoding="utf-8"
               ).removesuffix("\n")
+              signature = subprocess.check_output(
+                  ["git", "for-each-ref", "--format=%(contents:signature)", ref], encoding="utf-8"
+              ).removesuffix("\n")
+              if signature:
+                  notes = notes.removesuffix(signature)
           lines = notes.splitlines(keepends=True)
           first_line = lines[0].rstrip("\r\n") if lines else ""
           title = f"{tag} - {first_line}" if first_line else tag
