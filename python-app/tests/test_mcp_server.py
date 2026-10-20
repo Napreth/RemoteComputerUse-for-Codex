@@ -49,6 +49,36 @@ async def test_connect_preserves_valid_overrides_and_empty_domain_through_mcp(mo
     )
 
 
+@pytest.mark.parametrize(("tool", "arguments"), [
+    ("computer_click", {"x": True, "y": 2}),
+    ("computer_move", {"x": 1.5, "y": 2}),
+    ("computer_click", {"x": "1", "y": 2}),
+    ("computer_scroll", {"x": 1, "y": 2, "delta_y": 120.0}),
+])
+async def test_mcp_rejects_wrong_json_number_types_before_sending_input(monkeypatch, tool, arguments):
+    actions = AsyncMock()
+    monkeypatch.setattr(mcp_server.sessions, "run_actions", actions)
+    with pytest.raises(ToolError):
+        await mcp_server.mcp.call_tool(tool, arguments)
+    actions.assert_not_awaited()
+
+
+async def test_strict_mcp_preserves_valid_action_models_and_screenshot_output(monkeypatch):
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(buffer, format="PNG")
+    actions = AsyncMock(return_value=buffer.getvalue())
+    monkeypatch.setattr(mcp_server.sessions, "run_actions", actions)
+    result = await mcp_server.mcp.call_tool("computer_run_actions", {"actions": [
+        {"type": "drag", "path": [{"x": 1, "y": 2}, {"x": 3, "y": 4}], "duration_ms": 12},
+    ]})
+    assert result.content[0].type == "image"
+    assert actions.await_args.args[0][0].path[1].x == 3
+
+
 @asynccontextmanager
 async def _startup_client(parameters: StdioServerParameters, budget: float = 30):
     async with AsyncExitStack() as stack:
@@ -258,6 +288,10 @@ async def test_bundled_package_starts_and_lists_tools(tmp_path: Path, installati
     # missing its Python version file when another Python appears first.
     process_env["PLUGIN_ROOT"] = str(root)
     process_env["PYTHONPATH"] = str(probe)
+    # Package startup is tested without user configuration. Do not read the
+    # developer's real profiles or let their feature switches change this test.
+    process_env["LOCALAPPDATA"] = str(tmp_path / "test-user-config")
+    process_env["XDG_CONFIG_HOME"] = str(tmp_path / "test-user-config")
     host_uv_values: dict[str, str] = {}
     expected_environment_path = root / "python-app" / ".venv"
     if installation == "cold-cache":

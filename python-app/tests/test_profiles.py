@@ -421,14 +421,12 @@ def test_direct_agent_settings_reject_invalid_or_profile_only_fields(config_file
 
 
 async def test_agent_tools_only_register_when_enabled_and_recheck_revocation(config_file, monkeypatch):
-    from mcp.server.mcpserver import MCPServer
-
     connect = AsyncMock(return_value={"connected": True})
     monkeypatch.setattr(mcp_server.sessions, "connect", connect)
     for fill, direct in ((False, False), (True, False), (False, True), (True, True)):
         save(config_file, rdp(fillByAgent=["password"]),
              enableDeclareAsFillByAgent=fill, enableProfileFromAgent=direct)
-        server = MCPServer("test-agent-features")
+        server = mcp_server.RemoteComputerMCPServer("test-agent-features")
         mcp_server.register_agent_tools(server)
         tools = {tool.name: tool for tool in await server.list_tools()}
         assert ("computer_connect_filled_profile" in tools) is fill
@@ -461,20 +459,29 @@ async def test_agent_tools_only_register_when_enabled_and_recheck_revocation(con
         assert connect.await_count == calls
 
 
-@pytest.mark.parametrize("mode", ["filled", "direct"])
-async def test_agent_connection_backend_errors_redact_credentials(config_file, monkeypatch, mode):
+@pytest.mark.parametrize("mode", ["filled", "direct", "saved", "environment"])
+async def test_connection_backend_errors_redact_credentials(config_file, monkeypatch, mode):
     from urllib.parse import quote
 
     password = "secret@needle/测试"
     encoded = quote(password, safe="")
     save(config_file, rdp(fillByAgent=["password"]),
          enableDeclareAsFillByAgent=True, enableProfileFromAgent=True)
+    if mode == "saved":
+        save(config_file, rdp(password=password))
+    elif mode == "environment":
+        monkeypatch.setenv("REMOTE_COMPUTER_BACKEND", "rdp")
+        monkeypatch.setenv("REMOTE_COMPUTER_RDP_HOST", "localhost")
+        monkeypatch.setenv("REMOTE_COMPUTER_RDP_USERNAME", "alice")
+        monkeypatch.setenv("REMOTE_COMPUTER_RDP_PASSWORD", password)
     monkeypatch.setattr(mcp_server.sessions, "connect", AsyncMock(side_effect=RuntimeError(f"failed {password} / {encoded}")))
     with pytest.raises(Exception, match="redacted") as caught:
         if mode == "filled":
             await mcp_server.computer_connect_filled_profile("vm-dev", {"password": password})
-        else:
+        elif mode == "direct":
             await mcp_server.computer_connect_from_agent("rdp", "localhost", username="alice", password=password)
+        else:
+            await mcp_server.computer_connect(profile="vm-dev" if mode == "saved" else None)
     assert password not in str(caught.value)
     assert encoded not in str(caught.value)
 
@@ -532,3 +539,85 @@ def test_agent_cannot_change_a_saved_profile_backend(config_file):
     with pytest.raises(ProfilesError, match="type.*cannot be filled"):
         profiles.load_filled_profile("vm-dev", {"type": "vnc", "password": "secret-needle"})
     assert profiles.load_filled_profile("vm-dev", {"password": "secret-needle"}).kind == "rdp"
+
+
+@pytest.mark.parametrize("mode", ["direct", "filled"])
+@pytest.mark.parametrize("password", [
+    "null", "[]", "{}", '["test"]', '{"test": 1}', "true", "false", "123456", '"quoted"', " null ", "中文😀",
+])
+async def test_mcp_password_strings_are_never_reinterpreted_as_json(config_file, monkeypatch, mode, password):
+    save(config_file, rdp(fillByAgent=["password"]),
+         enableDeclareAsFillByAgent=True, enableProfileFromAgent=True)
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    server = mcp_server.RemoteComputerMCPServer("literal-passwords")
+    mcp_server.register_agent_tools(server)
+    if mode == "direct":
+        await server.call_tool("computer_connect_from_agent", {
+            "backend": "rdp", "host": "localhost", "username": "alice", "password": password,
+        })
+    else:
+        await server.call_tool("computer_connect_filled_profile", {"profile": "vm-dev", "fields": {"password": password}})
+    assert connect.await_args.args[0].password == password
+
+
+@pytest.mark.parametrize("profile", ["null", "[]", "{}", '["test"]'])
+async def test_json_shaped_profile_names_never_fall_back_to_environment(config_file, monkeypatch, profile):
+    save(config_file, rdp(name=profile, password="profile-secret"))
+    for key in tuple(os.environ):
+        if key.startswith("REMOTE_COMPUTER_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("REMOTE_COMPUTER_BACKEND", "rdp")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_HOST", "wrong-target.example")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_USERNAME", "wrong-user")
+    monkeypatch.setenv("REMOTE_COMPUTER_RDP_PASSWORD", "wrong-environment-secret")
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    await mcp_server.mcp.call_tool("computer_connect", {"profile": profile, "name": "null"})
+    config, name = connect.await_args.args
+    assert (config.host, config.username, config.password, name) == ("192.0.2.10", "alice", "profile-secret", "null")
+
+
+async def test_optional_agent_strings_and_session_names_remain_literal(config_file, monkeypatch):
+    save(config_file, enableProfileFromAgent=True)
+    connect = AsyncMock(return_value={"connected": True})
+    status = AsyncMock(return_value={"connected": False})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    monkeypatch.setattr(mcp_server.sessions, "status", status)
+    server = mcp_server.RemoteComputerMCPServer("literal-identity")
+    mcp_server.register_agent_tools(server)
+    await server.call_tool("computer_connect_from_agent", {
+        "backend": "rdp", "host": "localhost", "username": "null", "domain": "null", "name": "null",
+    })
+    config, name = connect.await_args.args
+    assert (config.username, config.domain, name) == ("null", "null", "null")
+    await mcp_server.mcp.call_tool("computer_status", {"session": "null"})
+    status.assert_awaited_once_with("null")
+
+
+@pytest.mark.parametrize(("tool", "arguments"), [
+    ("computer_connect", {"profile": "vm-dev", "password": "secret-needle"}),
+    ("computer_connect_from_agent", {"backend": "vnc", "host": "localhost", "passwdenv": "secret-needle"}),
+    ("computer_connect_from_agent", {"backend": "vnc", "host": "localhost", "password": "secret-needle", "type": "rdp"}),
+    ("computer_connect_filled_profile", {
+        "profile": "vm-dev", "fields": {"password": "secret-needle"}, "host": "unexpected.example",
+    }),
+])
+async def test_mcp_connection_tools_reject_unknown_arguments_without_echoing_secrets(
+    config_file, monkeypatch, tool, arguments,
+):
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    save(config_file, rdp(fillByAgent=["password"]),
+         enableDeclareAsFillByAgent=True, enableProfileFromAgent=True)
+    connect = AsyncMock(return_value={"connected": True})
+    monkeypatch.setattr(mcp_server.sessions, "connect", connect)
+    server = mcp_server.mcp if tool == "computer_connect" else mcp_server.RemoteComputerMCPServer("unknown-arguments")
+    if server is not mcp_server.mcp:
+        mcp_server.register_agent_tools(server)
+    with pytest.raises(ToolError) as caught:
+        await server.call_tool(tool, arguments)
+    assert "secret-needle" not in str(caught.value)
+    connect.assert_not_awaited()
+    for info in await server.list_tools():
+        assert info.input_schema["additionalProperties"] is False

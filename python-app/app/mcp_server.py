@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Callable
 from typing import Annotated, Any
 from urllib.parse import quote
 
 from mcp.server.mcpserver import Context, Image, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
-from mcp_types import CallToolResult, InputRequiredResult, TextContent
+from mcp.server.mcpserver.utilities.func_metadata import FuncMetadata
+from mcp_types import CallToolResult, Icon, InputRequiredResult, TextContent, ToolAnnotations
 from pydantic import Field, SecretStr, ValidationError
 
 from . import __version__
@@ -38,7 +40,43 @@ from .profiles import (
 )
 
 
+class _LiteralToolMetadata(FuncMetadata):
+    def pre_parse_json(self, data: dict[str, Any]) -> dict[str, Any]:
+        # MCP arguments are already JSON values. In particular, do not turn
+        # optional strings or SecretStr passwords such as "null" into None.
+        return data
+
+
 class RemoteComputerMCPServer(MCPServer):
+    def add_tool(
+        self,
+        fn: Callable[..., Any],
+        name: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        annotations: ToolAnnotations | None = None,
+        icons: list[Icon] | None = None,
+        meta: dict[str, Any] | None = None,
+        structured_output: bool | None = None,
+    ) -> None:
+        # MCP 2.2.0's public add_tool returns no metadata handle; keep this
+        # version-specific manager access here instead of patching the SDK.
+        tool = self._tool_manager.add_tool(
+            fn, name=name, title=title, description=description, annotations=annotations,
+            icons=icons, meta=meta, structured_output=structured_output,
+        )
+        metadata = tool.fn_metadata
+        argument_model = metadata.arg_model
+        argument_model.model_config["extra"] = "forbid"
+        argument_model.model_config["strict"] = True
+        argument_model.model_config["hide_input_in_errors"] = True
+        argument_model.model_rebuild(force=True)
+        tool.fn_metadata = _LiteralToolMetadata(
+            arg_model=argument_model, output_schema=metadata.output_schema,
+            output_model=metadata.output_model, wrap_output=metadata.wrap_output,
+        )
+        tool.parameters = argument_model.model_json_schema(by_alias=True)
+
     async def call_tool(
         self, name: str, arguments: dict[str, Any], context: Context | None = None,
     ) -> CallToolResult | InputRequiredResult:
@@ -121,12 +159,12 @@ async def computer_connect(
             config = load_backend_config(
                 backend, host=host, port=port, username=username, domain=domain, width=width, height=height,
             )
-        return await sessions.connect(config, name)
     except Exception as error:
         raise _tool_error(error) from error
+    return await _connect_config(config, name)
 
 
-async def _connect_agent_config(config: BackendConfig, name: str | None) -> dict[str, Any]:
+async def _connect_config(config: BackendConfig, name: str | None) -> dict[str, Any]:
     try:
         return await sessions.connect(config, name)
     except Exception as error:  # noqa: BLE001 - redact backend failures before returning them through MCP
@@ -147,7 +185,7 @@ async def computer_connect_filled_profile(
         config = await asyncio.to_thread(load_filled_profile, profile, fields)
     except Exception as error:
         raise _tool_error(error) from error
-    return await _connect_agent_config(config, name)
+    return await _connect_config(config, name)
 
 
 async def computer_connect_from_agent(
@@ -172,10 +210,10 @@ async def computer_connect_from_agent(
         config = await asyncio.to_thread(load_agent_profile, values)
     except Exception as error:
         raise _tool_error(error) from error
-    return await _connect_agent_config(config, name)
+    return await _connect_config(config, name)
 
 
-def register_agent_tools(server: MCPServer) -> None:
+def register_agent_tools(server: RemoteComputerMCPServer) -> None:
     # Invalid/missing user configuration must not prevent MCP initialization.
     # Connection calls re-read it and enforce the current switches each time.
     try:

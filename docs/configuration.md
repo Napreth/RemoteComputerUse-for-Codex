@@ -58,6 +58,8 @@ computer_connect_from_agent(backend="rdp", host="192.0.2.10", username="alice", 
 
 The direct tool accepts `rdp` or `vnc`, requires `host` and RDP `username`, and uses the same port/dimension/TLS/shared defaults and validation as saved profiles. It does not inherit `REMOTE_COMPUTER_*` values. `name` still identifies the runtime session; it does not create a saved profile. `passwdenv` is not an Agent input. Enabling either feature permits passwords in the corresponding tool arguments and conversation/client history. Existing default tools continue to omit a password argument.
 
+MCP arguments use their declared JSON types. Strings, including passwords or profile names such as `"null"`, are preserved literally; arrays and objects must be passed as arrays and objects, not JSON encoded inside strings. Unknown arguments and incorrect numeric types are rejected before remote input is sent. All connection tools redact resolved passwords from connection-failure messages.
+
 ## Existing environment connections
 
 Without `profile`, `computer_connect()` can use values already present in the MCP process environment. The package declares no forwarding list; it cannot supply variables the Codex Host has not injected. This also applies to `passwdenv` and optional uv settings. The bundled MCP user-environment limitation is tracked in [release compatibility](release-compatibility.md).
