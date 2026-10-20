@@ -6,7 +6,7 @@
 
 ## 安装
 
-安装 Codex、Python 3.12 和 `uv`，确保 `uv` 在 `PATH` 中。从 [Releases 页面](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases)的 **Assets** 下载 `remote-computer-use-1.0.0.zip`。进入 Codex 客户端，点击侧边栏的 **Customize**，进入 **Plugins → 添加 → 上传插件压缩包**，选择下载的 ZIP，无需解压。从设置页进入 Plugins 可能没有上传选项。
+安装 Codex、Python 3.12 和 `uv`，确保 `uv` 在 `PATH` 中。从 [Releases 页面](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases)的 **Assets** 下载 `remote-computer-use-1.0.1.zip`。进入 Codex 客户端，点击侧边栏的 **Customize**，进入 **Plugins → 添加 → 上传插件压缩包**，选择下载的 ZIP，无需解压。从设置页进入 Plugins 可能没有上传选项。
 
 Codex 通过 `uv` 和项目锁文件启动内置的 `remote_computer` MCP 服务。首次启动可能联网安装依赖；当前启动兼容性记录见[发布兼容性](docs/release-compatibility.md)。
 
@@ -68,18 +68,18 @@ VNC 支持 RFB 3.8、Raw 编码及 None/VNC 密码认证，不提供 TLS，请�
 
 ## 开发
 
-运行 `python scripts/package_plugin.py`（Python 3.12+，仅标准库）或 `pnpm plugin:pack` 打包，默认生成 `dist/remote-computer-use-1.0.0.zip`；可用 `--output <路径>.zip` 指定目标。包中包含内置 MCP 运行时和文档，排除本地配置及开发产物，并固定 ZIP 元数据以便重复构建。
+运行 `python scripts/package_plugin.py`（Python 3.12+，仅标准库）或 `pnpm plugin:pack` 打包，默认生成 `dist/remote-computer-use-1.0.1.zip`；可用 `--output <路径>.zip` 指定目标。包中包含内置 MCP 运行时和文档，排除本地配置及开发产物，并固定 ZIP 元数据以便重复构建。
 
 `pnpm check` 执行 Python、Console、契约、Labs 和构建检查。`pnpm dev:python` 启动保留的 runner 和 Console，`pnpm start:python` 使用构建后的 Console。旧 JavaScript/Playwright 后端已停用。
 
 发布时先更新 `plugin.json` 的版本号并提交，再推送同版本 tag（可带 `v` 前缀）。GitHub Actions 会等待 Linux 和 Windows 检查全部通过，然后构建插件 ZIP，通过 [softprops/action-gh-release](https://github.com/softprops/action-gh-release) 发布。Release 标题为“{tag 名} - {tag 注释第一行}”。正文使用第一行之后的内容，从第一个非空行开始；后面没有非空行时，正文为空。轻量 tag 没有注释时，标题只使用 tag 名，正文为空。带预发布后缀的语义版本会标记为预发布。版本不匹配或检查失败时不会发布。使用内置 `GITHUB_TOKEN`，无需额外配置 Secret。
 
 ```sh
-git tag -a v1.0.0 -m "发布标题" -m "在这里填写本次发布说明"
-git push origin v1.0.0
+git tag -a v1.0.1 -m "发布标题" -m "在这里填写本次发布说明"
+git push origin v1.0.1
 ```
 
-发布时使用下一个尚未使用的版本号，以上 `v1.0.0` 仅为示例。多段 Markdown 发布说明可先写入文件，再用 `git tag -a <tag> --cleanup=verbatim -F <说明文件>` 保留格式和 `#` 标题。
+发布时使用下一个尚未使用的版本号，以上 `v1.0.1` 仅为示例。多段 Markdown 发布说明可先写入文件，再用 `git tag -a <tag> --cleanup=verbatim -F <说明文件>` 保留格式和 `#` 标题。
 
 ## 许可证
 

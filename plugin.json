@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "remote-computer-use",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Run named persistent Python computer-use sessions over RDP and VNC through the bundled Codex MCP server.",
   "author": {
     "name": "Napreth"

@@ -112,7 +112,8 @@ def test_cli_needs_only_standard_library_and_resolves_its_own_root(source: Path,
         text=True,
         check=True,
     )
-    expected = source / "dist/remote-computer-use-1.0.0.zip"
+    manifest = json.loads((source / "plugin.json").read_text(encoding="utf-8"))
+    expected = source / "dist" / f"{manifest['name']}-{manifest['version']}.zip"
     assert result.stdout.strip() == str(expected)
     assert expected.is_file()
     assert not (source / ".git").exists() and not (source / "python-app/.venv").exists()

@@ -6,7 +6,7 @@ A Codex plugin based on OpenAI's Computer Use sample. It replaces local desktop 
 
 ## Install
 
-Install Codex, Python 3.12 and `uv`, with `uv` on `PATH`. Download `remote-computer-use-1.0.0.zip` from **Assets** on the [Releases page](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases). In Codex, open **Customize** from the sidebar, select **Plugins → Add → Upload plugin ZIP**, and choose the archive without extracting it. The Plugins page reached through Settings may not show the upload option.
+Install Codex, Python 3.12 and `uv`, with `uv` on `PATH`. Download `remote-computer-use-1.0.1.zip` from **Assets** on the [Releases page](https://github.com/Napreth/RemoteComputerUse-for-Codex/releases). In Codex, open **Customize** from the sidebar, select **Plugins → Add → Upload plugin ZIP**, and choose the archive without extracting it. The Plugins page reached through Settings may not show the upload option.
 
 Codex starts the bundled `remote_computer` MCP server using `uv` and the project's lockfile. The first start may download dependencies; current startup compatibility results are tracked in [release compatibility](docs/release-compatibility.md).
 
@@ -68,18 +68,18 @@ VNC supports RFB 3.8 with Raw encoding and None/VNC-password authentication, wit
 
 ## Development
 
-Build an upload ZIP with `python scripts/package_plugin.py` (Python 3.12+, standard library only) or `pnpm plugin:pack`. Output defaults to `dist/remote-computer-use-1.0.0.zip`; pass `--output <path>.zip` to choose another destination. The archive includes the bundled MCP runtime and docs, excludes local configuration and development artifacts, and uses fixed ZIP metadata for repeatable builds.
+Build an upload ZIP with `python scripts/package_plugin.py` (Python 3.12+, standard library only) or `pnpm plugin:pack`. Output defaults to `dist/remote-computer-use-1.0.1.zip`; pass `--output <path>.zip` to choose another destination. The archive includes the bundled MCP runtime and docs, excludes local configuration and development artifacts, and uses fixed ZIP metadata for repeatable builds.
 
 Run `pnpm check` for Python, Console, contracts, Labs and build checks. `pnpm dev:python` starts the retained runner and Console; `pnpm start:python` uses the built Console. The old JavaScript/Playwright backend is retired.
 
 To publish a release, set `plugin.json`'s version, commit the changes, then push a matching tag (with or without a `v` prefix). GitHub Actions waits for both Linux and Windows checks, builds the plugin ZIP, and publishes it using [softprops/action-gh-release](https://github.com/softprops/action-gh-release). The release title is `<tag name> - <first line of the tag message>`. The description uses the remaining message, starting at the first nonblank line after the first line; if there is none, it is empty. Lightweight tags use only the tag name as the title and have an empty description. Semantic versions with a prerelease suffix are marked as prereleases. A version mismatch or failed check prevents publication. The workflow uses the built-in `GITHUB_TOKEN`; no extra secret is needed.
 
 ```sh
-git tag -a v1.0.0 -m "Release title" -m "Describe the changes here"
-git push origin v1.0.0
+git tag -a v1.0.1 -m "Release title" -m "Describe the changes here"
+git push origin v1.0.1
 ```
 
-Use the next unused version when releasing; `v1.0.0` above is only an example. Put multiline Markdown release notes in a file and use `git tag -a <tag> --cleanup=verbatim -F <notes-file>` to preserve their formatting, including `#` headings.
+Use the next unused version when releasing; `v1.0.1` above is only an example. Put multiline Markdown release notes in a file and use `git tag -a <tag> --cleanup=verbatim -F <notes-file>` to preserve their formatting, including `#` headings.
 
 ## License
 
